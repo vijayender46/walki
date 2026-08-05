@@ -5,7 +5,7 @@ import {
   radius,
   spacing,
   typography,
-} from '@/constants/theme';
+} from '@/theme';
 
 type TalkButtonProps = {
   onPressIn?: () => void;

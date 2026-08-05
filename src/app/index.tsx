@@ -1,25 +1,31 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+
+import { TalkButton } from '@/components/TalkButton';
+import { colors, spacing, typography } from '@/theme';
 
 export default function HomeScreen() {
+  const handleTalkStart = () => {
+    console.log('Recording started');
+  };
+
+  const handleTalkEnd = () => {
+    console.log('Recording stopped');
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.logo}>Walki</Text>
+      <View style={styles.heading}>
+        <Text style={styles.logo}>Walki</Text>
 
-      <Text style={styles.subtitle}>
-        Simple voice communication for parents and kids.
-      </Text>
+        <Text style={styles.subtitle}>
+          Simple voice communication for parents and kids.
+        </Text>
+      </View>
 
-      <Pressable
-        style={({ pressed }) => [
-          styles.talkButton,
-          pressed && styles.talkButtonPressed,
-        ]}
-        onPressIn={() => console.log('Recording started')}
-        onPressOut={() => console.log('Recording stopped and sent')}
-      >
-        <Text style={styles.microphone}>🎙️</Text>
-        <Text style={styles.buttonText}>Hold to Talk</Text>
-      </Pressable>
+      <TalkButton
+        onPressIn={handleTalkStart}
+        onPressOut={handleTalkEnd}
+      />
 
       <Text style={styles.helperText}>
         Press and hold the button to record a message.
@@ -33,49 +39,32 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    backgroundColor: '#f7f8fc',
+    paddingHorizontal: spacing.xl,
+    backgroundColor: colors.background,
   },
+
+  heading: {
+    alignItems: 'center',
+    marginBottom: spacing.xxxl,
+  },
+
   logo: {
-    fontSize: 42,
-    fontWeight: '800',
-    color: '#111827',
-    marginBottom: 12,
+    ...typography.title,
+    color: colors.textPrimary,
+    marginBottom: spacing.md,
   },
+
   subtitle: {
+    ...typography.subtitle,
     maxWidth: 300,
     textAlign: 'center',
-    fontSize: 17,
-    lineHeight: 24,
-    color: '#4b5563',
-    marginBottom: 48,
+    color: colors.textSecondary,
   },
-  talkButton: {
-    width: 190,
-    height: 190,
-    borderRadius: 95,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#ffb703',
-    elevation: 6,
-  },
-  talkButtonPressed: {
-    transform: [{ scale: 0.95 }],
-    opacity: 0.85,
-  },
-  microphone: {
-    fontSize: 42,
-    marginBottom: 10,
-  },
-  buttonText: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#111827',
-  },
+
   helperText: {
-    marginTop: 32,
-    fontSize: 14,
+    ...typography.caption,
+    marginTop: spacing.xxl,
     textAlign: 'center',
-    color: '#6b7280',
+    color: colors.textMuted,
   },
 });
