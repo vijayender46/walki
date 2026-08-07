@@ -7,6 +7,8 @@
     "icon": "./assets/images/icons/icon.png",
     "userInterfaceStyle": "automatic",
     "android": {
+      "package": "com.vijayenderthakur.walki",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icons/icon.png",
         "backgroundColor": "#E8F1FF"
@@ -17,6 +19,8 @@
     },
     "plugins": [
       "expo-router",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
       [
         "expo-splash-screen",
         {
@@ -25,7 +29,9 @@
           "imageWidth": 220,
           "resizeMode": "contain"
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
     ]
   }
 }
