@@ -25,7 +25,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#F7FAFF",
-          "image": "./assets/images/walki-logo-boy.svg",
+          "image": "./assets/images/walki-logo-boy.png",
           "imageWidth": 220,
           "resizeMode": "contain"
         }
