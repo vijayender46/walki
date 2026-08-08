@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "636286619671",
+    "project_id": "walki-20285",
+    "storage_bucket": "walki-20285.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:636286619671:android:03cb94056a56b431dfcc52",
+        "android_client_info": {
+          "package_name": "com.vijayenderthakur.walki"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAvIfO-SG9b6JtPzRMrURUOLOrG7hN1_us"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
