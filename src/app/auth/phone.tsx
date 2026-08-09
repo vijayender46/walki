@@ -1,4 +1,7 @@
-import { useMemo, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { getAuth, signInWithPhoneNumber } from "@react-native-firebase/auth";
+import { router, useLocalSearchParams } from "expo-router";
+import { useMemo, useState } from "react";
 import {
   ImageBackground,
   KeyboardAvoidingView,
@@ -9,68 +12,123 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+} from "react-native";
 
-import { colors, radius, spacing, typography } from '@/theme';
+import { authStore } from "@/features/auth/authStore";
+import { colors, radius, spacing, typography } from "@/theme";
 
-const backgroundImage = require('../../../assets/branding/splash-background-blue.png');
+const backgroundImage = require("../../../assets/branding/splash-background-blue.png");
 
-type Role = 'parent' | 'kid';
+type Role = "parent" | "kid";
 
 export default function PhoneScreen() {
   const { role: roleParam } = useLocalSearchParams<{ role?: string }>();
 
-  const role: Role = roleParam === 'kid' ? 'kid' : 'parent';
+  const role: Role = roleParam === "kid" ? "kid" : "parent";
 
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
 
-  const digitsOnly = phoneNumber.replace(/\D/g, '');
+  const digitsOnly = phoneNumber.replace(/\D/g, "");
 
   const isValid = useMemo(() => {
     return digitsOnly.length >= 10 && digitsOnly.length <= 11;
   }, [digitsOnly]);
 
   const handlePhoneChange = (value: string) => {
-    const cleanedValue = value.replace(/[^\d\s]/g, '');
+    const cleanedValue = value.replace(/[^\d\s]/g, "");
+
     setPhoneNumber(cleanedValue);
     setHasSubmitted(false);
+    setFirebaseError(null);
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     setHasSubmitted(true);
+    setFirebaseError(null);
 
-    if (!isValid) {
+    if (!isValid || isSending) {
       return;
     }
 
-    const fullPhoneNumber = `+44${digitsOnly.replace(/^0/, '')}`;
+    const localNumber = digitsOnly.replace(/^0/, "");
+    const fullPhoneNumber = `+44${localNumber}`;
 
-    router.push({
-      pathname: '/auth/verify',
-      params: {
-        role,
-        phone: fullPhoneNumber,
-      },
-    });
+    try {
+      setIsSending(true);
+
+      const firebaseAuth = getAuth();
+
+      const confirmation = await signInWithPhoneNumber(
+        firebaseAuth,
+        fullPhoneNumber,
+      );
+
+      authStore.setConfirmation(confirmation);
+
+      router.push({
+        pathname: "/auth/verify",
+        params: {
+          role,
+          phone: fullPhoneNumber,
+        },
+      });
+    } catch (error: unknown) {
+      console.error("Firebase phone auth error:", error);
+
+      let message =
+        "We could not send the verification code. Please try again.";
+
+      if (typeof error === "object" && error !== null && "code" in error) {
+        const errorCode = String((error as { code?: unknown }).code ?? "");
+
+        switch (errorCode) {
+          case "auth/invalid-phone-number":
+            message = "Please enter a valid mobile number.";
+            break;
+
+          case "auth/too-many-requests":
+            message =
+              "Too many verification attempts. Please wait and try again later.";
+            break;
+
+          case "auth/quota-exceeded":
+            message =
+              "SMS verification is temporarily unavailable. Please try again later.";
+            break;
+
+          case "auth/network-request-failed":
+            message =
+              "Network error. Please check your internet connection and try again.";
+            break;
+
+          default:
+            message =
+              "We could not send the verification code. Please try again.";
+        }
+      }
+
+      setFirebaseError(message);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
     <ImageBackground
       source={backgroundImage}
-      resizeMode="cover"
       style={styles.background}
+      resizeMode="cover"
     >
       <KeyboardAvoidingView
         style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
         >
           <Pressable
             accessibilityRole="button"
@@ -79,16 +137,12 @@ export default function PhoneScreen() {
             onPress={() => router.back()}
             style={styles.backButton}
           >
-            <Ionicons
-              name="arrow-back"
-              size={24}
-              color={colors.textPrimary}
-            />
+            <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
           </Pressable>
 
           <View style={styles.heading}>
             <Text style={styles.eyebrow}>
-              {role === 'parent' ? 'PARENT ACCOUNT' : 'KID ACCOUNT'}
+              {role === "parent" ? "PARENT ACCOUNT" : "KID ACCOUNT"}
             </Text>
 
             <Text style={styles.title}>Enter your phone number</Text>
@@ -109,6 +163,7 @@ export default function PhoneScreen() {
             >
               <View style={styles.countryCode}>
                 <Text style={styles.flag}>🇬🇧</Text>
+
                 <Text style={styles.countryCodeText}>+44</Text>
               </View>
 
@@ -118,6 +173,7 @@ export default function PhoneScreen() {
                 accessibilityLabel="Mobile phone number"
                 autoComplete="tel"
                 autoCorrect={false}
+                editable={!isSending}
                 keyboardType="phone-pad"
                 maxLength={13}
                 onChangeText={handlePhoneChange}
@@ -140,23 +196,31 @@ export default function PhoneScreen() {
               </Text>
             )}
 
+            {firebaseError ? (
+              <Text style={styles.errorText}>{firebaseError}</Text>
+            ) : null}
+
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Continue to verification"
+              disabled={!isValid || isSending}
               onPress={handleContinue}
               style={({ pressed }) => [
                 styles.continueButton,
-                !isValid && styles.continueButtonDisabled,
-                pressed && isValid && styles.continueButtonPressed,
+                (!isValid || isSending) && styles.continueButtonDisabled,
+                pressed &&
+                  isValid &&
+                  !isSending &&
+                  styles.continueButtonPressed,
               ]}
             >
-              <Text style={styles.continueButtonText}>Continue</Text>
+              <Text style={styles.continueButtonText}>
+                {isSending ? "Sending code..." : "Continue"}
+              </Text>
 
-              <Ionicons
-                name="arrow-forward"
-                size={20}
-                color={colors.white}
-              />
+              {!isSending && (
+                <Ionicons name="arrow-forward" size={20} color={colors.white} />
+              )}
             </Pressable>
           </View>
 
@@ -182,17 +246,17 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: spacing.xl,
-    paddingTop: Platform.OS === 'ios' ? 64 : 42,
+    paddingTop: Platform.OS === "ios" ? 64 : 42,
     paddingBottom: spacing.xxl,
   },
 
   backButton: {
     width: 46,
     height: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderRadius: radius.round,
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    backgroundColor: "rgba(255,255,255,0.82)",
   },
 
   heading: {
@@ -201,7 +265,7 @@ const styles = StyleSheet.create({
 
   eyebrow: {
     ...typography.caption,
-    fontWeight: '700',
+    fontWeight: "700",
     letterSpacing: 1.4,
     color: colors.primary,
     marginBottom: spacing.md,
@@ -227,15 +291,15 @@ const styles = StyleSheet.create({
 
   label: {
     ...typography.body,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.textPrimary,
     marginBottom: spacing.sm,
   },
 
   inputContainer: {
     minHeight: 66,
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
@@ -248,8 +312,8 @@ const styles = StyleSheet.create({
   },
 
   countryCode: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
   },
 
@@ -259,7 +323,7 @@ const styles = StyleSheet.create({
 
   countryCodeText: {
     ...typography.body,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.textPrimary,
   },
 
@@ -274,7 +338,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 62,
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.textPrimary,
   },
 
@@ -292,9 +356,9 @@ const styles = StyleSheet.create({
 
   continueButton: {
     minHeight: 58,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.sm,
     borderRadius: radius.md,
     backgroundColor: colors.primary,
@@ -317,9 +381,9 @@ const styles = StyleSheet.create({
 
   privacyText: {
     ...typography.caption,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textMuted,
-    marginTop: 'auto',
+    marginTop: "auto",
     paddingTop: spacing.xxxl,
   },
 });

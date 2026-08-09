@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ImageBackground,
   KeyboardAvoidingView,
@@ -9,18 +11,17 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+} from "react-native";
 
-import { colors, radius, spacing, typography } from '@/theme';
+import { authStore } from "@/features/auth/authStore";
+import { colors, radius, spacing, typography } from "@/theme";
 
-const backgroundImage = require('../../../assets/branding/splash-background-blue.png');
+const backgroundImage = require("../../../assets/branding/splash-background-blue.png");
 
 const OTP_LENGTH = 6;
 const RESEND_SECONDS = 30;
 
-type Role = 'parent' | 'kid';
+type Role = "parent" | "kid";
 
 export default function VerifyScreen() {
   const inputRef = useRef<TextInput>(null);
@@ -30,22 +31,21 @@ export default function VerifyScreen() {
     role?: string;
   }>();
 
-  const role: Role = roleParam === 'kid' ? 'kid' : 'parent';
+  const role: Role = roleParam === "kid" ? "kid" : "parent";
 
-  const [code, setCode] = useState('');
-  const [hasSubmitted, setHasSubmitted] = useState(false);
-  const [secondsRemaining, setSecondsRemaining] =
-    useState(RESEND_SECONDS);
+  const [code, setCode] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [firebaseError, setFirebaseError] = useState<string | null>(null);
+  const [secondsRemaining, setSecondsRemaining] = useState(RESEND_SECONDS);
 
   const isComplete = code.length === OTP_LENGTH;
-  const hasError = hasSubmitted && !isComplete;
 
   const formattedPhone = useMemo(() => {
     if (!phone) {
-      return '';
+      return "";
     }
 
-    if (phone.startsWith('+44') && phone.length >= 12) {
+    if (phone.startsWith("+44") && phone.length >= 12) {
       const localNumber = phone.slice(3);
 
       return `+44 ${localNumber.slice(0, 4)} ${localNumber.slice(
@@ -78,29 +78,81 @@ export default function VerifyScreen() {
   }, []);
 
   const handleCodeChange = (value: string) => {
-    const cleanedCode = value.replace(/\D/g, '').slice(0, OTP_LENGTH);
+    const cleanedCode = value.replace(/\D/g, "").slice(0, OTP_LENGTH);
 
     setCode(cleanedCode);
-    setHasSubmitted(false);
+    setFirebaseError(null);
   };
 
-  const handleVerify = () => {
-    setHasSubmitted(true);
+  const handleVerify = async () => {
+    setFirebaseError(null);
 
-    if (!isComplete) {
+    if (!isComplete || isVerifying) {
       inputRef.current?.focus();
       return;
     }
 
-    console.log('OTP ready for Firebase verification:', code);
+    const confirmation = authStore.getConfirmation();
 
-    router.replace({
-      pathname: '/account/setup',
-      params: {
-        role,
-        phone: phone ?? '',
-      },
-    });
+    if (!confirmation) {
+      setFirebaseError(
+        "Verification session expired. Please request a new code.",
+      );
+      return;
+    }
+
+    try {
+      setIsVerifying(true);
+
+      const userCredential = await confirmation.confirm(code);
+
+      if (!userCredential?.user) {
+        throw new Error("No Firebase user returned after verification.");
+      }
+
+      authStore.clearConfirmation();
+
+      router.replace({
+        pathname: "/account/setup",
+        params: {
+          role,
+          phone: phone ?? "",
+        },
+      });
+    } catch (error: unknown) {
+      console.error("OTP verification error:", error);
+
+      let message = "Verification failed. Please check the code and try again.";
+
+      if (typeof error === "object" && error !== null && "code" in error) {
+        const errorCode = String((error as { code?: unknown }).code ?? "");
+
+        switch (errorCode) {
+          case "auth/invalid-verification-code":
+            message = "That verification code is incorrect. Please try again.";
+            break;
+
+          case "auth/session-expired":
+            message =
+              "This verification code has expired. Please request a new one.";
+            break;
+
+          case "auth/too-many-requests":
+            message = "Too many attempts. Please wait before trying again.";
+            break;
+
+          default:
+            message =
+              "Verification failed. Please check the code and try again.";
+        }
+      }
+
+      setFirebaseError(message);
+      setCode("");
+      inputRef.current?.focus();
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleResend = () => {
@@ -108,27 +160,22 @@ export default function VerifyScreen() {
       return;
     }
 
-    setCode('');
-    setHasSubmitted(false);
-    setSecondsRemaining(RESEND_SECONDS);
-
-    inputRef.current?.focus();
-
-    console.log('Resend OTP requested');
+    router.replace({
+      pathname: "/auth/phone",
+      params: {
+        role,
+      },
+    });
   };
 
-  // const handleChangeNumber = () => {
-  //   router.back();
-  // };
-
   const handleChangeNumber = () => {
-  router.replace({
-    pathname: '/auth/phone',
-    params: {
-      role,
-    },
-  });
-};
+    router.replace({
+      pathname: "/auth/phone",
+      params: {
+        role,
+      },
+    });
+  };
 
   return (
     <ImageBackground
@@ -137,7 +184,7 @@ export default function VerifyScreen() {
       style={styles.background}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.keyboardView}
       >
         <ScrollView
@@ -152,11 +199,7 @@ export default function VerifyScreen() {
             onPress={() => router.back()}
             style={styles.backButton}
           >
-            <Ionicons
-              name="arrow-back"
-              size={24}
-              color={colors.textPrimary}
-            />
+            <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
           </Pressable>
 
           <View style={styles.heading}>
@@ -170,40 +213,25 @@ export default function VerifyScreen() {
 
             <Text style={styles.eyebrow}>VERIFY YOUR NUMBER</Text>
 
-            <Text style={styles.title}>
-              Enter the six-digit code
-            </Text>
+            <Text style={styles.title}>Enter the six-digit code</Text>
 
-            <Text style={styles.subtitle}>
-              We sent a verification code to
-            </Text>
+            <Text style={styles.subtitle}>We sent a verification code to</Text>
 
-            {/* <Pressable
+            <Pressable
               accessibilityRole="button"
               accessibilityLabel="Change phone number"
+              accessibilityHint="Returns to the phone number screen"
+              hitSlop={12}
               onPress={handleChangeNumber}
+              style={({ pressed }) => [
+                styles.phoneButton,
+                pressed && styles.phoneButtonPressed,
+              ]}
             >
               <Text style={styles.phone}>{formattedPhone}</Text>
-            </Pressable> */}
-            <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Change phone number"
-                accessibilityHint="Returns to the phone number screen"
-                hitSlop={12}
-                onPress={handleChangeNumber}
-                style={({ pressed }) => [
-                  styles.phoneButton,
-                  pressed && styles.phoneButtonPressed,
-                ]}
-              >
-                <Text style={styles.phone}>{formattedPhone}</Text>
 
-                <Ionicons
-                  name="pencil"
-                  size={16}
-                  color={colors.primary}
-                />
-              </Pressable>
+              <Ionicons name="pencil" size={16} color={colors.primary} />
+            </Pressable>
           </View>
 
           <Pressable
@@ -214,7 +242,7 @@ export default function VerifyScreen() {
           >
             <View style={styles.codeRow}>
               {Array.from({ length: OTP_LENGTH }).map((_, index) => {
-                const digit = code[index] ?? '';
+                const digit = code[index] ?? "";
                 const isActive =
                   index === code.length && code.length < OTP_LENGTH;
 
@@ -223,9 +251,9 @@ export default function VerifyScreen() {
                     key={index}
                     style={[
                       styles.codeBox,
-                      digit !== '' && styles.codeBoxFilled,
+                      digit !== "" && styles.codeBoxFilled,
                       isActive && styles.codeBoxActive,
-                      hasError && styles.codeBoxError,
+                      firebaseError && styles.codeBoxError,
                     ]}
                   >
                     <Text style={styles.codeDigit}>{digit}</Text>
@@ -239,7 +267,6 @@ export default function VerifyScreen() {
               accessibilityLabel="Verification code"
               autoComplete="one-time-code"
               caretHidden
-              contextMenuHidden={false}
               keyboardType="number-pad"
               maxLength={OTP_LENGTH}
               onChangeText={handleCodeChange}
@@ -251,10 +278,8 @@ export default function VerifyScreen() {
             />
           </Pressable>
 
-          {hasError ? (
-            <Text style={styles.errorText}>
-              Enter the complete six-digit code.
-            </Text>
+          {firebaseError ? (
+            <Text style={styles.errorText}>{firebaseError}</Text>
           ) : (
             <Text style={styles.helperText}>
               The code may take a few seconds to arrive.
@@ -264,27 +289,32 @@ export default function VerifyScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Verify phone number"
-            disabled={!isComplete}
+            disabled={!isComplete || isVerifying}
             onPress={handleVerify}
             style={({ pressed }) => [
               styles.verifyButton,
-              !isComplete && styles.verifyButtonDisabled,
-              pressed && isComplete && styles.verifyButtonPressed,
+              (!isComplete || isVerifying) && styles.verifyButtonDisabled,
+              pressed &&
+                isComplete &&
+                !isVerifying &&
+                styles.verifyButtonPressed,
             ]}
           >
-            <Text style={styles.verifyButtonText}>Verify</Text>
+            <Text style={styles.verifyButtonText}>
+              {isVerifying ? "Verifying..." : "Verify"}
+            </Text>
 
-            <Ionicons
-              name="checkmark-circle"
-              size={21}
-              color={colors.white}
-            />
+            {!isVerifying && (
+              <Ionicons
+                name="checkmark-circle"
+                size={21}
+                color={colors.white}
+              />
+            )}
           </Pressable>
 
           <View style={styles.resendContainer}>
-            <Text style={styles.resendQuestion}>
-              Didn’t receive the code?
-            </Text>
+            <Text style={styles.resendQuestion}>Didn’t receive the code?</Text>
 
             <Pressable
               accessibilityRole="button"
@@ -295,21 +325,20 @@ export default function VerifyScreen() {
               <Text
                 style={[
                   styles.resendButton,
-                  secondsRemaining > 0 &&
-                    styles.resendButtonDisabled,
+                  secondsRemaining > 0 && styles.resendButtonDisabled,
                 ]}
               >
                 {secondsRemaining > 0
                   ? `Resend in ${secondsRemaining}s`
-                  : 'Resend code'}
+                  : "Resend code"}
               </Text>
             </Pressable>
           </View>
 
           <Text style={styles.footer}>
-            {role === 'parent'
-              ? 'Creating a secure parent account.'
-              : 'Connecting you securely with your parent.'}
+            {role === "parent"
+              ? "Creating a secure parent account."
+              : "Connecting you securely with your parent."}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -318,26 +347,6 @@ export default function VerifyScreen() {
 }
 
 const styles = StyleSheet.create({
-  phoneButton: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: spacing.sm,
-  minHeight: 44,
-  paddingHorizontal: spacing.md,
-  marginTop: spacing.xs,
-  borderRadius: radius.round,
-},
-
-phoneButtonPressed: {
-  backgroundColor: 'rgba(45,108,223,0.1)',
-},
-
-phone: {
-  ...typography.body,
-  fontWeight: '700',
-  color: colors.primary,
-},
   background: {
     flex: 1,
     backgroundColor: colors.background,
@@ -350,37 +359,37 @@ phone: {
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: spacing.xl,
-    paddingTop: Platform.OS === 'ios' ? 64 : 42,
+    paddingTop: Platform.OS === "ios" ? 64 : 42,
     paddingBottom: spacing.xxl,
   },
 
   backButton: {
     width: 46,
     height: 46,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderRadius: radius.round,
-    backgroundColor: 'rgba(255,255,255,0.82)',
+    backgroundColor: "rgba(255,255,255,0.82)",
   },
 
   heading: {
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: spacing.xxl,
   },
 
   iconContainer: {
     width: 72,
     height: 72,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderRadius: radius.round,
-    backgroundColor: 'rgba(45,108,223,0.12)',
+    backgroundColor: "rgba(45,108,223,0.12)",
     marginBottom: spacing.lg,
   },
 
   eyebrow: {
     ...typography.caption,
-    fontWeight: '700',
+    fontWeight: "700",
     letterSpacing: 1.4,
     color: colors.primary,
     marginBottom: spacing.md,
@@ -390,25 +399,46 @@ phone: {
     ...typography.title,
     fontSize: 34,
     lineHeight: 41,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textPrimary,
   },
 
   subtitle: {
     ...typography.body,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textSecondary,
     marginTop: spacing.md,
   },
 
+  phoneButton: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.xs,
+    borderRadius: radius.round,
+  },
+
+  phoneButtonPressed: {
+    backgroundColor: "rgba(45,108,223,0.1)",
+  },
+
+  phone: {
+    ...typography.body,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+
   codeSection: {
-    position: 'relative',
+    position: "relative",
     marginTop: spacing.xxxl,
   },
 
   codeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    justifyContent: "space-between",
     gap: spacing.sm,
   },
 
@@ -416,8 +446,8 @@ phone: {
     flex: 1,
     maxWidth: 54,
     aspectRatio: 0.82,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
@@ -426,7 +456,7 @@ phone: {
 
   codeBoxFilled: {
     borderColor: colors.primary,
-    backgroundColor: 'rgba(45,108,223,0.06)',
+    backgroundColor: "rgba(45,108,223,0.06)",
   },
 
   codeBoxActive: {
@@ -440,12 +470,12 @@ phone: {
 
   codeDigit: {
     fontSize: 26,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.textPrimary,
   },
 
   hiddenInput: {
-    position: 'absolute',
+    position: "absolute",
     width: 1,
     height: 1,
     opacity: 0,
@@ -453,23 +483,23 @@ phone: {
 
   helperText: {
     ...typography.caption,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textMuted,
     marginTop: spacing.md,
   },
 
   errorText: {
     ...typography.caption,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.danger,
     marginTop: spacing.md,
   },
 
   verifyButton: {
     minHeight: 58,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.sm,
     borderRadius: radius.md,
     backgroundColor: colors.primary,
@@ -491,7 +521,7 @@ phone: {
   },
 
   resendContainer: {
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: spacing.xxl,
   },
 
@@ -502,7 +532,7 @@ phone: {
 
   resendButton: {
     ...typography.body,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.primary,
     marginTop: spacing.xs,
   },
@@ -513,9 +543,9 @@ phone: {
 
   footer: {
     ...typography.caption,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textMuted,
-    marginTop: 'auto',
+    marginTop: "auto",
     paddingTop: spacing.xxxl,
   },
 });
