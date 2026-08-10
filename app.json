@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icons/icon.png",
     "userInterfaceStyle": "automatic",
+
     "android": {
       "package": "com.vijayenderthakur.walki",
       "googleServicesFile": "./google-services.json",
@@ -14,9 +15,11 @@
         "backgroundColor": "#E8F1FF"
       }
     },
+
     "web": {
       "favicon": "./assets/images/icons/favicon.png"
     },
+
     "plugins": [
       "expo-router",
       "@react-native-firebase/app",
@@ -29,10 +32,9 @@
           "imageWidth": 220,
           "resizeMode": "contain"
         }
-      ],
-      "@react-native-firebase/app",
-      "@react-native-firebase/auth"
+      ]
     ],
+
     "extra": {
       "router": {},
       "eas": {
