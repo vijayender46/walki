@@ -1,3 +1,4 @@
+import { getUserProfile } from "@/features/auth/userProfileService";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -111,6 +112,13 @@ export default function VerifyScreen() {
       }
 
       authStore.clearConfirmation();
+
+      const existingProfile = await getUserProfile(userCredential.user.uid);
+
+      if (existingProfile) {
+        router.replace("/home");
+        return;
+      }
 
       router.replace({
         pathname: "/account/setup",

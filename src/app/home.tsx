@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { getAuth, signOut } from "@react-native-firebase/auth";
+import { router } from "expo-router";
 
 import { useAuth } from "@/features/auth/AuthContext";
 import { colors, radius, spacing, typography } from "@/theme";
@@ -8,9 +9,18 @@ import { colors, radius, spacing, typography } from "@/theme";
 export default function HomeScreen() {
   const { profile } = useAuth();
 
+  const handleAddKid = () => {
+    router.push("/family/create");
+  };
+
   const handleLogout = async () => {
-    const auth = getAuth();
-    await signOut(auth);
+    try {
+      const auth = getAuth();
+
+      await signOut(auth);
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
   };
 
   return (
@@ -23,7 +33,35 @@ export default function HomeScreen() {
         {profile?.role === "parent" ? "Parent account" : "Kid account"}
       </Text>
 
-      <Pressable onPress={handleLogout} style={styles.logoutButton}>
+      {profile?.role === "parent" && !profile.familyId ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add my kid"
+          onPress={handleAddKid}
+          style={({ pressed }) => [
+            styles.familyButton,
+            pressed && styles.familyButtonPressed,
+          ]}
+        >
+          <Text style={styles.familyButtonText}>Add my kid</Text>
+        </Pressable>
+      ) : null}
+
+      {profile?.role === "parent" && profile.familyId ? (
+        <View style={styles.familyConnected}>
+          <Text style={styles.familyConnectedText}>Family created</Text>
+        </View>
+      ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Log out"
+        onPress={handleLogout}
+        style={({ pressed }) => [
+          styles.logoutButton,
+          pressed && styles.logoutButtonPressed,
+        ]}
+      >
         <Text style={styles.logoutText}>Log out</Text>
       </Pressable>
     </View>
@@ -48,6 +86,7 @@ const styles = StyleSheet.create({
 
   subtitle: {
     ...typography.body,
+    textAlign: "center",
     color: colors.textSecondary,
     marginTop: spacing.md,
   },
@@ -58,6 +97,43 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
 
+  familyButton: {
+    minHeight: 54,
+    minWidth: 180,
+    paddingHorizontal: spacing.xl,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    marginTop: spacing.xxl,
+  },
+
+  familyButtonPressed: {
+    transform: [{ scale: 0.98 }],
+    backgroundColor: colors.primaryPressed,
+  },
+
+  familyButtonText: {
+    ...typography.button,
+    color: colors.white,
+  },
+
+  familyConnected: {
+    minHeight: 46,
+    paddingHorizontal: spacing.xl,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    marginTop: spacing.xxl,
+  },
+
+  familyConnectedText: {
+    ...typography.body,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+
   logoutButton: {
     minHeight: 52,
     minWidth: 140,
@@ -66,6 +142,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.textPrimary,
     marginTop: spacing.xxxl,
+  },
+
+  logoutButtonPressed: {
+    opacity: 0.8,
   },
 
   logoutText: {
