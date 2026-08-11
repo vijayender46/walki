@@ -1,0 +1,125 @@
+import { getAuth, signInAnonymously } from "@react-native-firebase/auth";
+
+import {
+    doc,
+    getDoc,
+    getFirestore,
+    runTransaction,
+    serverTimestamp,
+} from "@react-native-firebase/firestore";
+
+type JoinFamilyResult = {
+  familyId: string;
+  kidUid: string;
+};
+
+export async function joinFamilyWithCode(
+  inviteCode: string,
+): Promise<JoinFamilyResult> {
+  const cleanedCode = inviteCode.trim();
+
+  if (!/^\d{6}$/.test(cleanedCode)) {
+    throw new Error("INVALID_CODE");
+  }
+
+  const auth = getAuth();
+
+  let user = auth.currentUser;
+
+  if (!user) {
+    const credential = await signInAnonymously(auth);
+    user = credential.user;
+  }
+
+  if (!user.isAnonymous) {
+    throw new Error("KID_DEVICE_ALREADY_SIGNED_IN");
+  }
+
+  const db = getFirestore();
+
+  const inviteRef = doc(db, "familyInvites", cleanedCode);
+
+  const inviteSnapshot = await getDoc(inviteRef);
+
+  if (!inviteSnapshot.exists()) {
+    throw new Error("INVITE_NOT_FOUND");
+  }
+
+  const invite = inviteSnapshot.data();
+
+  if (!invite) {
+    throw new Error("INVALID_INVITE");
+  }
+
+  if (invite.used === true) {
+    throw new Error("INVITE_ALREADY_USED");
+  }
+
+  const familyId = String(invite.familyId ?? "");
+
+  if (!familyId) {
+    throw new Error("INVALID_INVITE");
+  }
+
+  const familyRef = doc(db, "families", familyId);
+  const kidUserRef = doc(db, "users", user.uid);
+
+  await runTransaction(db, async (transaction) => {
+    const freshInvite = await transaction.get(inviteRef);
+    const familySnapshot = await transaction.get(familyRef);
+
+    if (!freshInvite.exists()) {
+      throw new Error("INVITE_NOT_FOUND");
+    }
+
+    if (!familySnapshot.exists()) {
+      throw new Error("FAMILY_NOT_FOUND");
+    }
+
+    const inviteData = freshInvite.data();
+    const familyData = familySnapshot.data();
+
+    if (!inviteData) {
+      throw new Error("INVALID_INVITE");
+    }
+
+    if (!familyData) {
+      throw new Error("FAMILY_NOT_FOUND");
+    }
+
+    if (inviteData.used === true) {
+      throw new Error("INVITE_ALREADY_USED");
+    }
+
+    if (familyData.kidUid) {
+      throw new Error("FAMILY_ALREADY_HAS_KID");
+    }
+
+    transaction.update(familyRef, {
+      kidUid: user.uid,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.update(inviteRef, {
+      used: true,
+      usedBy: user.uid,
+      usedAt: serverTimestamp(),
+    });
+
+    transaction.set(kidUserRef, {
+      uid: user.uid,
+      phone: "",
+      role: "kid",
+      displayName: "Kid",
+      theme: "pink",
+      familyId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  return {
+    familyId,
+    kidUid: user.uid,
+  };
+}

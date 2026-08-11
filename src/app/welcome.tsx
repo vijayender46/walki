@@ -1,24 +1,24 @@
+import { router } from "expo-router";
 import {
   ImageBackground,
   ScrollView,
   StyleSheet,
   Text,
   View,
-} from 'react-native';
-import { router } from 'expo-router';
+} from "react-native";
 
-import { RoleCard } from '@/components/RoleCard';
-import { colors, spacing, typography } from '@/theme';
+import { RoleCard } from "@/components/RoleCard";
+import { colors, spacing, typography } from "@/theme";
 
-const backgroundImage = require('../../assets/branding/splash-background-blue.png');
+const backgroundImage = require("../../assets/branding/splash-background-blue.png");
 
 export default function WelcomeScreen() {
   const handleParentPress = () => {
-    router.push('/auth/phone?role=parent');
+    router.push("/auth/phone?role=parent");
   };
 
   const handleKidPress = () => {
-    router.push('/auth/phone?role=kid');
+    router.push("/kid/join");
   };
 
   return (
@@ -34,9 +34,7 @@ export default function WelcomeScreen() {
         <View style={styles.heading}>
           <Text style={styles.eyebrow}>WELCOME TO WALKI</Text>
 
-          <Text style={styles.title}>
-            Who is using{'\n'}Walki today?
-          </Text>
+          <Text style={styles.title}>Who is using{"\n"}Walki today?</Text>
 
           <Text style={styles.subtitle}>
             Choose your account type to continue.
@@ -48,7 +46,7 @@ export default function WelcomeScreen() {
             title="Parent"
             description="Create and manage your family connection."
             icon="people"
-            gradientColors={['#2D6CDF', '#4AA8FF']}
+            gradientColors={["#2D6CDF", "#4AA8FF"]}
             onPress={handleParentPress}
           />
 
@@ -56,7 +54,7 @@ export default function WelcomeScreen() {
             title="Kid"
             description="Join your parent and start talking."
             icon="happy"
-            gradientColors={['#FF5CA8', '#FF8BC4']}
+            gradientColors={["#FF5CA8", "#FF8BC4"]}
             onPress={handleKidPress}
           />
         </View>
@@ -77,19 +75,19 @@ const styles = StyleSheet.create({
 
   content: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
     paddingHorizontal: spacing.xl,
     paddingVertical: spacing.xxxl,
   },
 
   heading: {
-    alignItems: 'center',
+    alignItems: "center",
     marginBottom: spacing.xxxl,
   },
 
   eyebrow: {
     ...typography.caption,
-    fontWeight: '700',
+    fontWeight: "700",
     letterSpacing: 1.5,
     color: colors.primary,
     marginBottom: spacing.md,
@@ -99,25 +97,25 @@ const styles = StyleSheet.create({
     ...typography.title,
     fontSize: 38,
     lineHeight: 46,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textPrimary,
   },
 
   subtitle: {
     ...typography.body,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textSecondary,
     marginTop: spacing.md,
   },
 
   cards: {
-    width: '100%',
+    width: "100%",
     gap: spacing.lg,
   },
 
   footer: {
     ...typography.caption,
-    textAlign: 'center',
+    textAlign: "center",
     color: colors.textMuted,
     marginTop: spacing.xxl,
   },
