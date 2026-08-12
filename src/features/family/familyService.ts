@@ -33,6 +33,65 @@ async function createUniqueInviteCode() {
   throw new Error("Unable to generate a unique family code.");
 }
 
+/**
+ * Creates a fresh one-time kid invite for an existing family.
+ *
+ * This supports multiple kids because every kid gets their own invite,
+ * while all kid profiles point to the same familyId.
+ */
+export async function createKidInvite(familyId: string) {
+  const auth = getAuth();
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("You must be signed in to create an invite.");
+  }
+
+  if (!familyId) {
+    throw new Error("INVALID_FAMILY");
+  }
+
+  const db = getFirestore();
+
+  const familyRef = doc(db, "families", familyId);
+  const familySnapshot = await getDoc(familyRef);
+
+  if (!familySnapshot.exists()) {
+    throw new Error("FAMILY_NOT_FOUND");
+  }
+
+  const familyData = familySnapshot.data();
+
+  if (!familyData) {
+    throw new Error("FAMILY_NOT_FOUND");
+  }
+
+  if (familyData.parentUid !== user.uid) {
+    throw new Error("NOT_FAMILY_PARENT");
+  }
+
+  const inviteCode = await createUniqueInviteCode();
+
+  const inviteRef = doc(db, "familyInvites", inviteCode);
+
+  await setDoc(inviteRef, {
+    code: inviteCode,
+    familyId,
+    parentUid: user.uid,
+    used: false,
+    createdAt: serverTimestamp(),
+  });
+
+  return {
+    familyId,
+    inviteCode,
+  };
+}
+
+/**
+ * Creates a brand-new family for a parent and generates
+ * the first kid invite.
+ */
 export async function createFamily() {
   const auth = getAuth();
   const user = auth.currentUser;
@@ -45,28 +104,10 @@ export async function createFamily() {
 
   const familyRef = doc(collection(db, "families"));
 
-  const inviteCode = await createUniqueInviteCode();
-
-  const inviteRef = doc(db, "familyInvites", inviteCode);
-
   await setDoc(familyRef, {
     parentUid: user.uid,
-    kidUid: null,
-
-    // Save the active invite directly on new family documents.
-    // This makes future invite retrieval fast and simple.
-    inviteCode,
-
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
-
-  await setDoc(inviteRef, {
-    code: inviteCode,
-    familyId: familyRef.id,
-    parentUid: user.uid,
-    used: false,
-    createdAt: serverTimestamp(),
   });
 
   const userRef = doc(db, "users", user.uid);
@@ -76,23 +117,35 @@ export async function createFamily() {
     updatedAt: serverTimestamp(),
   });
 
+  const result = await createKidInvite(familyRef.id);
+
   return {
     familyId: familyRef.id,
-    inviteCode,
+    inviteCode: result.inviteCode,
   };
 }
 
 /**
- * Returns the currently usable invite code for a family.
+ * Retrieves an unused invite for an existing family.
  *
- * New family documents store inviteCode directly.
- * Older family documents are supported through the familyInvites fallback query.
+ * Kept for compatibility with the existing /family/invite screen.
+ *
+ * For multi-kid support there may eventually be multiple invite
+ * documents for one family, so we search the invite collection
+ * instead of relying on families/{familyId}.inviteCode.
  */
 export async function getFamilyInviteCode(
   familyId: string,
 ): Promise<string | null> {
   if (!familyId) {
     return null;
+  }
+
+  const auth = getAuth();
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("You must be signed in to view an invite.");
   }
 
   const db = getFirestore();
@@ -110,30 +163,10 @@ export async function getFamilyInviteCode(
     return null;
   }
 
-  /*
-   * Newer families have the invite code stored directly.
-   */
-  const storedInviteCode = String(familyData.inviteCode ?? "");
-
-  if (storedInviteCode) {
-    const inviteRef = doc(db, "familyInvites", storedInviteCode);
-    const inviteSnapshot = await getDoc(inviteRef);
-
-    if (inviteSnapshot.exists()) {
-      const inviteData = inviteSnapshot.data();
-
-      if (inviteData && inviteData.used !== true) {
-        return storedInviteCode;
-      }
-    }
+  if (familyData.parentUid !== user.uid) {
+    throw new Error("NOT_FAMILY_PARENT");
   }
 
-  /*
-   * Backwards-compatible fallback.
-   *
-   * Your existing family was created before inviteCode was stored
-   * directly on the family document, so we locate its invite here.
-   */
   const invitesQuery = query(
     collection(db, "familyInvites"),
     where("familyId", "==", familyId),
@@ -145,7 +178,7 @@ export async function getFamilyInviteCode(
     const inviteData = inviteDocument.data();
 
     if (inviteData && inviteData.used !== true) {
-      return inviteDocument.id;
+      return String(inviteData.code ?? inviteDocument.id);
     }
   }
 

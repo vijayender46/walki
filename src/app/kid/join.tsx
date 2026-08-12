@@ -3,12 +3,12 @@ import { router } from "expo-router";
 import { useState } from "react";
 
 import {
-    ActivityIndicator,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
 import { joinFamilyWithCode } from "@/features/family/kidJoinService";
@@ -37,9 +37,14 @@ export default function KidJoinScreen() {
       setIsJoining(true);
       setError(null);
 
-      await joinFamilyWithCode(code);
+      const result = await joinFamilyWithCode(code);
 
-      router.replace("/home");
+      router.replace({
+        pathname: "/kid/setup",
+        params: {
+          familyId: result.familyId,
+        },
+      });
     } catch (err: unknown) {
       console.error("Kid join error:", err);
 

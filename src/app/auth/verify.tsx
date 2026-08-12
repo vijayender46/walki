@@ -128,36 +128,40 @@ export default function VerifyScreen() {
         },
       });
     } catch (error: unknown) {
-      console.error("OTP verification error:", error);
-
       let message = "Verification failed. Please check the code and try again.";
+      let errorCode = "";
 
       if (typeof error === "object" && error !== null && "code" in error) {
-        const errorCode = String((error as { code?: unknown }).code ?? "");
+        errorCode = String((error as { code?: unknown }).code ?? "");
+      }
 
-        switch (errorCode) {
-          case "auth/invalid-verification-code":
-            message = "That verification code is incorrect. Please try again.";
-            break;
+      switch (errorCode) {
+        case "auth/invalid-verification-code":
+          message = "That verification code is incorrect. Please try again.";
+          break;
 
-          case "auth/session-expired":
-            message =
-              "This verification code has expired. Please request a new one.";
-            break;
+        case "auth/session-expired":
+          message =
+            "This verification code has expired. Please request a new one.";
+          authStore.clearConfirmation();
+          break;
 
-          case "auth/too-many-requests":
-            message = "Too many attempts. Please wait before trying again.";
-            break;
+        case "auth/too-many-requests":
+          message =
+            "Too many verification attempts. Please wait before trying again.";
+          break;
 
-          default:
-            message =
-              "Verification failed. Please check the code and try again.";
-        }
+        default:
+          console.error("Unexpected OTP verification error:", error);
+          message = "Verification failed. Please check the code and try again.";
       }
 
       setFirebaseError(message);
       setCode("");
-      inputRef.current?.focus();
+
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
     } finally {
       setIsVerifying(false);
     }

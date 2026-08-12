@@ -1,20 +1,112 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 import { getAuth, signOut } from "@react-native-firebase/auth";
 import { router } from "expo-router";
 
 import { useAuth } from "@/features/auth/AuthContext";
+import type { UserProfile } from "@/features/auth/types";
+import { getFamilyKids } from "@/features/family/familyMembersService";
+import { createKidInvite } from "@/features/family/familyService";
 import { colors, radius, spacing, typography } from "@/theme";
 
 export default function HomeScreen() {
   const { profile } = useAuth();
 
-  const handleAddKid = () => {
+  const [kids, setKids] = useState<UserProfile[]>([]);
+  const [isLoadingKids, setIsLoadingKids] = useState(false);
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+  const [familyError, setFamilyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadKids = async () => {
+      if (profile?.role !== "parent" || !profile.familyId) {
+        if (isMounted) {
+          setKids([]);
+        }
+
+        return;
+      }
+
+      try {
+        setIsLoadingKids(true);
+        setFamilyError(null);
+
+        const familyKids = await getFamilyKids(profile.familyId);
+
+        if (isMounted) {
+          setKids(familyKids);
+        }
+      } catch (error) {
+        console.error("Load family kids error:", error);
+
+        if (isMounted) {
+          setFamilyError("We couldn't load your kids.");
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingKids(false);
+        }
+      }
+    };
+
+    loadKids();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [profile?.familyId, profile?.role]);
+
+  const handleCreateFirstFamily = () => {
     router.push("/family/create");
   };
 
-  const handleOpenFamily = () => {
+  const handleAddAnotherKid = async () => {
+    if (!profile?.familyId || isCreatingInvite) {
+      return;
+    }
+
+    try {
+      setIsCreatingInvite(true);
+      setFamilyError(null);
+
+      const result = await createKidInvite(profile.familyId);
+
+      router.push({
+        pathname: "/family/invite",
+        params: {
+          code: result.inviteCode,
+        },
+      });
+    } catch (error) {
+      console.error("Create kid invite error:", error);
+
+      setFamilyError("We couldn't create a kid invite. Please try again.");
+    } finally {
+      setIsCreatingInvite(false);
+    }
+  };
+
+  const handleOpenExistingInvite = () => {
     router.push("/family/invite");
+  };
+
+  const handleKidPress = (kid: UserProfile) => {
+    router.push({
+      pathname: "/kid/[uid]",
+      params: {
+        uid: kid.uid,
+      },
+    });
   };
 
   const handleLogout = async () => {
@@ -22,26 +114,49 @@ export default function HomeScreen() {
       const auth = getAuth();
 
       await signOut(auth);
+
+      router.replace("/");
     } catch (error) {
       console.error("Logout error:", error);
     }
   };
 
+  const getInitial = (name: string) => {
+    const cleanedName = name.trim();
+
+    if (!cleanedName) {
+      return "K";
+    }
+
+    return cleanedName.charAt(0).toUpperCase();
+  };
+
+  if (!profile) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Hi {profile?.displayName ?? "Walki"}</Text>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={styles.title}>Hi {profile.displayName || "Walki"}</Text>
 
       <Text style={styles.subtitle}>Your Walki profile is ready.</Text>
 
       <Text style={styles.role}>
-        {profile?.role === "parent" ? "Parent account" : "Kid account"}
+        {profile.role === "parent" ? "Parent account" : "Kid account"}
       </Text>
 
-      {profile?.role === "parent" && !profile.familyId ? (
+      {profile.role === "parent" && !profile.familyId ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Add my kid"
-          onPress={handleAddKid}
+          onPress={handleCreateFirstFamily}
           style={({ pressed }) => [
             styles.familyButton,
             pressed && styles.familyButtonPressed,
@@ -51,20 +166,109 @@ export default function HomeScreen() {
         </Pressable>
       ) : null}
 
-      {profile?.role === "parent" && profile.familyId ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="View family"
-          onPress={handleOpenFamily}
-          style={({ pressed }) => [
-            styles.familyConnected,
-            pressed && styles.familyConnectedPressed,
-          ]}
-        >
-          <Text style={styles.familyConnectedText}>Family created</Text>
+      {profile.role === "parent" && profile.familyId ? (
+        <View style={styles.familySection}>
+          <View style={styles.familyHeader}>
+            <View>
+              <Text style={styles.sectionEyebrow}>YOUR FAMILY</Text>
 
-          <Text style={styles.familyConnectedHint}>Tap to view kid invite</Text>
-        </Pressable>
+              <Text style={styles.sectionTitle}>Your kids</Text>
+            </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="View current kid invite"
+              onPress={handleOpenExistingInvite}
+              hitSlop={10}
+            >
+              <Text style={styles.inviteLink}>Invite</Text>
+            </Pressable>
+          </View>
+
+          {isLoadingKids ? (
+            <ActivityIndicator
+              color={colors.primary}
+              style={styles.kidsLoader}
+            />
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.kidsRow}
+            >
+              {kids.map((kid) => {
+                const isPink = kid.theme === "pink";
+
+                return (
+                  <Pressable
+                    key={kid.uid}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${kid.displayName || "kid"} profile`}
+                    onPress={() => handleKidPress(kid)}
+                    style={({ pressed }) => [
+                      styles.kidItem,
+                      pressed && styles.kidItemPressed,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.avatar,
+                        isPink ? styles.avatarPink : styles.avatarBlue,
+                      ]}
+                    >
+                      <Text style={styles.avatarText}>
+                        {getInitial(kid.displayName)}
+                      </Text>
+                    </View>
+
+                    <Text numberOfLines={1} style={styles.kidName}>
+                      {kid.displayName || "Kid"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Add another kid"
+                disabled={isCreatingInvite}
+                onPress={handleAddAnotherKid}
+                style={({ pressed }) => [
+                  styles.kidItem,
+                  pressed && !isCreatingInvite && styles.kidItemPressed,
+                ]}
+              >
+                <View style={styles.addAvatar}>
+                  {isCreatingInvite ? (
+                    <ActivityIndicator color={colors.primary} />
+                  ) : (
+                    <Text style={styles.addSymbol}>+</Text>
+                  )}
+                </View>
+
+                <Text style={styles.kidName}>Add kid</Text>
+              </Pressable>
+            </ScrollView>
+          )}
+
+          {kids.length === 0 && !isLoadingKids ? (
+            <Text style={styles.emptyText}>
+              Add your first kid to start your Walki family.
+            </Text>
+          ) : null}
+
+          {familyError ? (
+            <Text style={styles.errorText}>{familyError}</Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {profile.role === "kid" ? (
+        <View style={styles.kidHomeCard}>
+          <Text style={styles.kidHomeTitle}>Family connected</Text>
+
+          <Text style={styles.kidHomeText}>Your kid home is ready.</Text>
+        </View>
       ) : null}
 
       <Pressable
@@ -78,16 +282,17 @@ export default function HomeScreen() {
       >
         <Text style={styles.logoutText}>Log out</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxxl,
     backgroundColor: colors.background,
   },
 
@@ -132,33 +337,138 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
-  familyConnected: {
-    minHeight: 64,
-    minWidth: 210,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
+  familySection: {
+    width: "100%",
+    marginTop: spacing.xxxl,
+  },
+
+  familyHeader: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginTop: spacing.xxl,
+    justifyContent: "space-between",
   },
 
-  familyConnectedPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.85,
+  sectionEyebrow: {
+    ...typography.caption,
+    fontWeight: "700",
+    letterSpacing: 1.2,
+    color: colors.primary,
   },
 
-  familyConnectedText: {
+  sectionTitle: {
+    ...typography.title,
+    fontSize: 24,
+    color: colors.textPrimary,
+    marginTop: spacing.xs,
+  },
+
+  inviteLink: {
     ...typography.body,
     fontWeight: "700",
     color: colors.primary,
   },
 
-  familyConnectedHint: {
+  kidsLoader: {
+    marginTop: spacing.xxl,
+  },
+
+  kidsRow: {
+    gap: spacing.lg,
+    paddingVertical: spacing.xl,
+  },
+
+  kidItem: {
+    width: 82,
+    alignItems: "center",
+  },
+
+  kidItemPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.8,
+  },
+
+  avatar: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  avatarBlue: {
+    backgroundColor: "#3B82F6",
+  },
+
+  avatarPink: {
+    backgroundColor: "#FF5CA8",
+  },
+
+  avatarText: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: colors.white,
+  },
+
+  addAvatar: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.primary,
+    borderStyle: "dashed",
+    backgroundColor: colors.surface,
+  },
+
+  addSymbol: {
+    fontSize: 36,
+    fontWeight: "400",
+    lineHeight: 40,
+    color: colors.primary,
+  },
+
+  kidName: {
+    ...typography.caption,
+    maxWidth: 82,
+    textAlign: "center",
+    fontWeight: "600",
+    color: colors.textPrimary,
+    marginTop: spacing.sm,
+  },
+
+  emptyText: {
     ...typography.caption,
     color: colors.textMuted,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
+  },
+
+  errorText: {
+    ...typography.caption,
+    color: colors.danger,
+    marginTop: spacing.md,
+  },
+
+  kidHomeCard: {
+    width: "100%",
+    padding: spacing.xl,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    marginTop: spacing.xxxl,
+  },
+
+  kidHomeTitle: {
+    ...typography.body,
+    fontWeight: "700",
+    textAlign: "center",
+    color: colors.primary,
+  },
+
+  kidHomeText: {
+    ...typography.caption,
+    textAlign: "center",
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
   },
 
   logoutButton: {

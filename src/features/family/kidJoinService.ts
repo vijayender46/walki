@@ -1,11 +1,11 @@
 import { getAuth, signInAnonymously } from "@react-native-firebase/auth";
 
 import {
-    doc,
-    getDoc,
-    getFirestore,
-    runTransaction,
-    serverTimestamp,
+  doc,
+  getDoc,
+  getFirestore,
+  runTransaction,
+  serverTimestamp,
 } from "@react-native-firebase/firestore";
 
 type JoinFamilyResult = {
@@ -61,44 +61,30 @@ export async function joinFamilyWithCode(
     throw new Error("INVALID_INVITE");
   }
 
-  const familyRef = doc(db, "families", familyId);
   const kidUserRef = doc(db, "users", user.uid);
 
   await runTransaction(db, async (transaction) => {
     const freshInvite = await transaction.get(inviteRef);
-    const familySnapshot = await transaction.get(familyRef);
 
     if (!freshInvite.exists()) {
       throw new Error("INVITE_NOT_FOUND");
     }
 
-    if (!familySnapshot.exists()) {
-      throw new Error("FAMILY_NOT_FOUND");
-    }
-
     const inviteData = freshInvite.data();
-    const familyData = familySnapshot.data();
 
     if (!inviteData) {
       throw new Error("INVALID_INVITE");
-    }
-
-    if (!familyData) {
-      throw new Error("FAMILY_NOT_FOUND");
     }
 
     if (inviteData.used === true) {
       throw new Error("INVITE_ALREADY_USED");
     }
 
-    if (familyData.kidUid) {
-      throw new Error("FAMILY_ALREADY_HAS_KID");
-    }
+    const freshFamilyId = String(inviteData.familyId ?? "");
 
-    transaction.update(familyRef, {
-      kidUid: user.uid,
-      updatedAt: serverTimestamp(),
-    });
+    if (!freshFamilyId || freshFamilyId !== familyId) {
+      throw new Error("INVALID_INVITE");
+    }
 
     transaction.update(inviteRef, {
       used: true,
