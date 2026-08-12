@@ -13,6 +13,10 @@ export default function HomeScreen() {
     router.push("/family/create");
   };
 
+  const handleOpenFamily = () => {
+    router.push("/family/invite");
+  };
+
   const handleLogout = async () => {
     try {
       const auth = getAuth();
@@ -48,9 +52,19 @@ export default function HomeScreen() {
       ) : null}
 
       {profile?.role === "parent" && profile.familyId ? (
-        <View style={styles.familyConnected}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="View family"
+          onPress={handleOpenFamily}
+          style={({ pressed }) => [
+            styles.familyConnected,
+            pressed && styles.familyConnectedPressed,
+          ]}
+        >
           <Text style={styles.familyConnectedText}>Family created</Text>
-        </View>
+
+          <Text style={styles.familyConnectedHint}>Tap to view kid invite</Text>
+        </Pressable>
       ) : null}
 
       <Pressable
@@ -119,8 +133,10 @@ const styles = StyleSheet.create({
   },
 
   familyConnected: {
-    minHeight: 46,
+    minHeight: 64,
+    minWidth: 210,
     paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: radius.md,
@@ -128,10 +144,21 @@ const styles = StyleSheet.create({
     marginTop: spacing.xxl,
   },
 
+  familyConnectedPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.85,
+  },
+
   familyConnectedText: {
     ...typography.body,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.primary,
+  },
+
+  familyConnectedHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
 
   logoutButton: {

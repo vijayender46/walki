@@ -19,10 +19,26 @@ export default function IndexScreen() {
     return <Redirect href="/splash" />;
   }
 
-  if (!profile) {
+  /*
+   * Anonymous users are kid devices.
+   * If they do not yet have a Firestore profile,
+   * they should continue the kid join flow.
+   */
+  if (user.isAnonymous && !profile) {
+    return <Redirect href="/kid/join" />;
+  }
+
+  /*
+   * Non-anonymous users are parent accounts.
+   * If their profile is missing, continue account setup.
+   */
+  if (!user.isAnonymous && !profile) {
     return <Redirect href="/account/setup" />;
   }
 
+  /*
+   * Completed parent and kid profiles both go home.
+   */
   return <Redirect href="/home" />;
 }
 
