@@ -11,6 +11,8 @@ import {
 import { getAuth, signOut } from "@react-native-firebase/auth";
 import { router } from "expo-router";
 
+import { TalkButton } from "@/components/TalkButton";
+import { useWalkiRecorder } from "@/features/audio/useWalkiRecorder";
 import { useAuth } from "@/features/auth/AuthContext";
 import type { UserProfile } from "@/features/auth/types";
 import { getFamilyKids } from "@/features/family/familyMembersService";
@@ -24,6 +26,14 @@ export default function HomeScreen() {
   const [isLoadingKids, setIsLoadingKids] = useState(false);
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
   const [familyError, setFamilyError] = useState<string | null>(null);
+
+  const {
+    isRecording,
+    audioUri,
+    error: recordingError,
+    startRecording,
+    stopRecording,
+  } = useWalkiRecorder();
 
   useEffect(() => {
     let isMounted = true;
@@ -107,6 +117,18 @@ export default function HomeScreen() {
         uid: kid.uid,
       },
     });
+  };
+
+  const handleTalkStart = () => {
+    void startRecording();
+  };
+
+  const handleTalkEnd = async () => {
+    const uri = await stopRecording();
+
+    if (uri) {
+      console.log("Recorded Walki message:", uri);
+    }
   };
 
   const handleLogout = async () => {
@@ -203,7 +225,9 @@ export default function HomeScreen() {
                   <Pressable
                     key={kid.uid}
                     accessibilityRole="button"
-                    accessibilityLabel={`Open ${kid.displayName || "kid"} profile`}
+                    accessibilityLabel={`Open ${
+                      kid.displayName || "kid"
+                    } profile`}
                     onPress={() => handleKidPress(kid)}
                     style={({ pressed }) => [
                       styles.kidItem,
@@ -270,6 +294,40 @@ export default function HomeScreen() {
           <Text style={styles.kidHomeText}>Your kid home is ready.</Text>
         </View>
       ) : null}
+
+      {/* Phase 5A — Local Push-to-Talk Recording */}
+      <View style={styles.talkSection}>
+        <Text style={styles.sectionEyebrow}>WALKI TALK</Text>
+
+        <Text style={styles.talkTitle}>
+          {isRecording ? "I'm listening..." : "Ready to talk"}
+        </Text>
+
+        <TalkButton onPressIn={handleTalkStart} onPressOut={handleTalkEnd} />
+
+        <Text
+          style={[
+            styles.recordingStatus,
+            isRecording && styles.recordingStatusActive,
+          ]}
+        >
+          {isRecording
+            ? "Keep holding while you talk"
+            : audioUri
+              ? "Voice message recorded"
+              : "Hold the button to talk"}
+        </Text>
+
+        {audioUri ? (
+          <Text numberOfLines={1} style={styles.audioUri}>
+            Local recording ready
+          </Text>
+        ) : null}
+
+        {recordingError ? (
+          <Text style={styles.recordingError}>{recordingError}</Text>
+        ) : null}
+      </View>
 
       <Pressable
         accessibilityRole="button"
@@ -469,6 +527,51 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: colors.textSecondary,
     marginTop: spacing.sm,
+  },
+
+  talkSection: {
+    width: "100%",
+    alignItems: "center",
+    marginTop: spacing.xxxl,
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+  },
+
+  talkTitle: {
+    ...typography.title,
+    fontSize: 24,
+    textAlign: "center",
+    color: colors.textPrimary,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xxl,
+  },
+
+  recordingStatus: {
+    ...typography.body,
+    color: colors.textSecondary,
+    marginTop: spacing.lg,
+    textAlign: "center",
+  },
+
+  recordingStatusActive: {
+    color: colors.danger,
+    fontWeight: "700",
+  },
+
+  audioUri: {
+    ...typography.caption,
+    color: colors.primary,
+    marginTop: spacing.sm,
+    textAlign: "center",
+  },
+
+  recordingError: {
+    ...typography.caption,
+    color: colors.danger,
+    marginTop: spacing.sm,
+    textAlign: "center",
   },
 
   logoutButton: {
