@@ -4,6 +4,8 @@ import {
   AudioModule,
   RecordingPresets,
   setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
@@ -11,6 +13,9 @@ import {
 export function useWalkiRecorder() {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
+
+  const player = useAudioPlayer(null);
+  const playerStatus = useAudioPlayerStatus(player);
 
   const operationInProgress = useRef(false);
 
@@ -31,6 +36,10 @@ export function useWalkiRecorder() {
       setError(null);
       setAudioUri(null);
 
+      if (playerStatus.playing) {
+        player.pause();
+      }
+
       const permission =
         await AudioModule.requestRecordingPermissionsAsync();
 
@@ -47,11 +56,6 @@ export function useWalkiRecorder() {
         allowsRecording: true,
       });
 
-      /*
-       * useAudioRecorder may already be prepared.
-       * Only prepare when the native recorder reports that it
-       * is not currently ready to record.
-       */
       if (!recorderState.canRecord) {
         await recorder.prepareToRecordAsync();
       }
@@ -95,7 +99,43 @@ export function useWalkiRecorder() {
     }
   };
 
+  const playRecording = async () => {
+    if (!audioUri) {
+      return;
+    }
+
+    try {
+      setError(null);
+
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+        shouldRouteThroughEarpiece: false,
+      });
+
+      player.volume = 1;
+
+      player.replace(audioUri);
+
+      await player.seekTo(0);
+
+      player.play();
+    } catch (err) {
+      console.error("Playback error:", err);
+
+      setError("Walki could not play this recording.");
+    }
+  };
+
+  const stopPlayback = () => {
+    if (playerStatus.playing) {
+      player.pause();
+    }
+  };
+
   const clearRecording = () => {
+    stopPlayback();
+
     setAudioUri(null);
     setError(null);
   };
@@ -104,10 +144,21 @@ export function useWalkiRecorder() {
     isRecording: recorderState.isRecording,
     durationMillis: recorderState.durationMillis,
     canRecord: recorderState.canRecord,
+
     audioUri,
+
+    isPlaying: playerStatus.playing,
+    playbackDuration: playerStatus.duration,
+    playbackPosition: playerStatus.currentTime,
+
     error,
+
     startRecording,
     stopRecording,
+
+    playRecording,
+    stopPlayback,
+
     clearRecording,
   };
 }

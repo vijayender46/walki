@@ -30,9 +30,13 @@ export default function HomeScreen() {
   const {
     isRecording,
     audioUri,
+    isPlaying,
     error: recordingError,
     startRecording,
     stopRecording,
+    playRecording,
+    stopPlayback,
+    clearRecording,
   } = useWalkiRecorder();
 
   useEffect(() => {
@@ -131,6 +135,19 @@ export default function HomeScreen() {
     }
   };
 
+  const handlePlayback = async () => {
+    if (isPlaying) {
+      stopPlayback();
+      return;
+    }
+
+    await playRecording();
+  };
+
+  const handleDiscardRecording = () => {
+    clearRecording();
+  };
+
   const handleLogout = async () => {
     try {
       const auth = getAuth();
@@ -193,7 +210,6 @@ export default function HomeScreen() {
           <View style={styles.familyHeader}>
             <View>
               <Text style={styles.sectionEyebrow}>YOUR FAMILY</Text>
-
               <Text style={styles.sectionTitle}>Your kids</Text>
             </View>
 
@@ -290,12 +306,10 @@ export default function HomeScreen() {
       {profile.role === "kid" ? (
         <View style={styles.kidHomeCard}>
           <Text style={styles.kidHomeTitle}>Family connected</Text>
-
           <Text style={styles.kidHomeText}>Your kid home is ready.</Text>
         </View>
       ) : null}
 
-      {/* Phase 5A — Local Push-to-Talk Recording */}
       <View style={styles.talkSection}>
         <Text style={styles.sectionEyebrow}>WALKI TALK</Text>
 
@@ -303,7 +317,10 @@ export default function HomeScreen() {
           {isRecording ? "I'm listening..." : "Ready to talk"}
         </Text>
 
-        <TalkButton onPressIn={handleTalkStart} onPressOut={handleTalkEnd} />
+        <TalkButton
+          onPressIn={handleTalkStart}
+          onPressOut={handleTalkEnd}
+        />
 
         <Text
           style={[
@@ -317,6 +334,40 @@ export default function HomeScreen() {
               ? "Voice message recorded"
               : "Hold the button to talk"}
         </Text>
+
+        {audioUri && !isRecording ? (
+          <View style={styles.playbackActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                isPlaying ? "Stop recording playback" : "Play recording"
+              }
+              onPress={handlePlayback}
+              style={({ pressed }) => [
+                styles.playButton,
+                pressed && styles.playButtonPressed,
+              ]}
+            >
+              <Text style={styles.playButtonText}>
+                {isPlaying ? "Stop playback" : "Play recording"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Discard recording"
+              disabled={isPlaying}
+              onPress={handleDiscardRecording}
+              style={({ pressed }) => [
+                styles.discardButton,
+                isPlaying && styles.discardButtonDisabled,
+                pressed && !isPlaying && styles.discardButtonPressed,
+              ]}
+            >
+              <Text style={styles.discardButtonText}>Discard</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {audioUri ? (
           <Text numberOfLines={1} style={styles.audioUri}>
@@ -558,6 +609,51 @@ const styles = StyleSheet.create({
   recordingStatusActive: {
     color: colors.danger,
     fontWeight: "700",
+  },
+
+  playbackActions: {
+    width: "100%",
+    marginTop: spacing.xl,
+    gap: spacing.sm,
+  },
+
+  playButton: {
+    minHeight: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+  },
+
+  playButtonPressed: {
+    transform: [{ scale: 0.98 }],
+    backgroundColor: colors.primaryPressed,
+  },
+
+  playButtonText: {
+    ...typography.button,
+    color: colors.white,
+  },
+
+  discardButton: {
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.background,
+  },
+
+  discardButtonPressed: {
+    opacity: 0.75,
+  },
+
+  discardButtonDisabled: {
+    opacity: 0.4,
+  },
+
+  discardButtonText: {
+    ...typography.button,
+    color: colors.textSecondary,
   },
 
   audioUri: {
