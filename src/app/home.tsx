@@ -12,12 +12,17 @@ import { getAuth, signOut } from "@react-native-firebase/auth";
 import { router } from "expo-router";
 
 import { TalkButton } from "@/components/TalkButton";
+import { downloadWalkiAudio } from "@/features/audio/audioDownloadService";
+import { uploadWalkiAudio } from "@/features/audio/audioUploadService";
 import { useWalkiRecorder } from "@/features/audio/useWalkiRecorder";
 import { useAuth } from "@/features/auth/AuthContext";
 import type { UserProfile } from "@/features/auth/types";
 import { getFamilyKids } from "@/features/family/familyMembersService";
 import { createKidInvite } from "@/features/family/familyService";
 import { colors, radius, spacing, typography } from "@/theme";
+
+const TEST_AUDIO_KEY =
+  "families/BVBgrjLSYk6dDu5hPXa9/6JbsV5kPzpXr8AVx3QCKZfbwhAp2/51d07364-75fe-4306-84f1-22d5cdc1aa1f.m4a";
 
 export default function HomeScreen() {
   const { profile } = useAuth();
@@ -27,6 +32,11 @@ export default function HomeScreen() {
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
   const [familyError, setFamilyError] = useState<string | null>(null);
 
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [uploadedAudioKey, setUploadedAudioKey] = useState<string | null>(null);
+
+  const [isDownloadingTestAudio, setIsDownloadingTestAudio] = useState(false);
+
   const {
     isRecording,
     audioUri,
@@ -35,6 +45,7 @@ export default function HomeScreen() {
     startRecording,
     stopRecording,
     playRecording,
+    playRecordingFromUri,
     stopPlayback,
     clearRecording,
   } = useWalkiRecorder();
@@ -124,6 +135,8 @@ export default function HomeScreen() {
   };
 
   const handleTalkStart = () => {
+    setUploadedAudioKey(null);
+
     void startRecording();
   };
 
@@ -146,6 +159,57 @@ export default function HomeScreen() {
 
   const handleDiscardRecording = () => {
     clearRecording();
+    setUploadedAudioKey(null);
+  };
+
+  const handleUploadRecording = async () => {
+    if (!audioUri || !profile?.familyId || isUploadingAudio) {
+      return;
+    }
+
+    try {
+      setIsUploadingAudio(true);
+      setUploadedAudioKey(null);
+
+      const result = await uploadWalkiAudio({
+        audioUri,
+        familyId: profile.familyId,
+      });
+
+      setUploadedAudioKey(result.key);
+
+      console.log("Walki audio uploaded successfully:", result.key);
+    } catch (error) {
+      console.error("Walki audio upload error:", error);
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
+
+  const handleTestSecurePlayback = async () => {
+    if (isDownloadingTestAudio) {
+      return;
+    }
+
+    try {
+      setIsDownloadingTestAudio(true);
+
+      if (isPlaying) {
+        stopPlayback();
+      }
+
+      const localUri = await downloadWalkiAudio({
+        objectKey: TEST_AUDIO_KEY,
+      });
+
+      console.log("Downloaded Walki audio:", localUri);
+
+      await playRecordingFromUri(localUri);
+    } catch (error) {
+      console.error("Secure playback test error:", error);
+    } finally {
+      setIsDownloadingTestAudio(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -210,6 +274,7 @@ export default function HomeScreen() {
           <View style={styles.familyHeader}>
             <View>
               <Text style={styles.sectionEyebrow}>YOUR FAMILY</Text>
+
               <Text style={styles.sectionTitle}>Your kids</Text>
             </View>
 
@@ -306,6 +371,7 @@ export default function HomeScreen() {
       {profile.role === "kid" ? (
         <View style={styles.kidHomeCard}>
           <Text style={styles.kidHomeTitle}>Family connected</Text>
+
           <Text style={styles.kidHomeText}>Your kid home is ready.</Text>
         </View>
       ) : null}
@@ -317,10 +383,7 @@ export default function HomeScreen() {
           {isRecording ? "I'm listening..." : "Ready to talk"}
         </Text>
 
-        <TalkButton
-          onPressIn={handleTalkStart}
-          onPressOut={handleTalkEnd}
-        />
+        <TalkButton onPressIn={handleTalkStart} onPressOut={handleTalkEnd} />
 
         <Text
           style={[
@@ -355,6 +418,27 @@ export default function HomeScreen() {
 
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel="Upload recording"
+              disabled={isUploadingAudio || isPlaying}
+              onPress={handleUploadRecording}
+              style={({ pressed }) => [
+                styles.uploadButton,
+                (isUploadingAudio || isPlaying) && styles.uploadButtonDisabled,
+                pressed &&
+                  !isUploadingAudio &&
+                  !isPlaying &&
+                  styles.uploadButtonPressed,
+              ]}
+            >
+              {isUploadingAudio ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.uploadButtonText}>Upload recording</Text>
+              )}
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
               accessibilityLabel="Discard recording"
               disabled={isPlaying}
               onPress={handleDiscardRecording}
@@ -369,6 +453,10 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
+        {uploadedAudioKey ? (
+          <Text style={styles.uploadSuccess}>Voice uploaded ✓</Text>
+        ) : null}
+
         {audioUri ? (
           <Text numberOfLines={1} style={styles.audioUri}>
             Local recording ready
@@ -378,6 +466,32 @@ export default function HomeScreen() {
         {recordingError ? (
           <Text style={styles.recordingError}>{recordingError}</Text>
         ) : null}
+
+        <View style={styles.secureTestSection}>
+          <Text style={styles.secureTestLabel}>PHASE 5B TEST</Text>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Test secure audio playback"
+            disabled={isDownloadingTestAudio}
+            onPress={handleTestSecurePlayback}
+            style={({ pressed }) => [
+              styles.secureTestButton,
+              isDownloadingTestAudio && styles.secureTestButtonDisabled,
+              pressed &&
+                !isDownloadingTestAudio &&
+                styles.secureTestButtonPressed,
+            ]}
+          >
+            {isDownloadingTestAudio ? (
+              <ActivityIndicator color={colors.white} />
+            ) : (
+              <Text style={styles.secureTestButtonText}>
+                Test secure playback
+              </Text>
+            )}
+          </Pressable>
+        </View>
       </View>
 
       <Pressable
@@ -635,6 +749,35 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
+  uploadButton: {
+    minHeight: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+  },
+
+  uploadButtonDisabled: {
+    opacity: 0.45,
+  },
+
+  uploadButtonPressed: {
+    transform: [{ scale: 0.98 }],
+  },
+
+  uploadButtonText: {
+    ...typography.button,
+    color: colors.white,
+  },
+
+  uploadSuccess: {
+    ...typography.caption,
+    fontWeight: "700",
+    color: colors.primary,
+    marginTop: spacing.md,
+    textAlign: "center",
+  },
+
   discardButton: {
     minHeight: 46,
     alignItems: "center",
@@ -668,6 +811,45 @@ const styles = StyleSheet.create({
     color: colors.danger,
     marginTop: spacing.sm,
     textAlign: "center",
+  },
+
+  secureTestSection: {
+    width: "100%",
+    marginTop: spacing.xxl,
+    paddingTop: spacing.xl,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+
+  secureTestLabel: {
+    ...typography.caption,
+    fontWeight: "700",
+    letterSpacing: 1.1,
+    textAlign: "center",
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+  },
+
+  secureTestButton: {
+    minHeight: 50,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    backgroundColor: colors.textPrimary,
+  },
+
+  secureTestButtonDisabled: {
+    opacity: 0.45,
+  },
+
+  secureTestButtonPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.85,
+  },
+
+  secureTestButtonText: {
+    ...typography.button,
+    color: colors.white,
   },
 
   logoutButton: {

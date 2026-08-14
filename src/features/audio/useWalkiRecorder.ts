@@ -23,10 +23,7 @@ export function useWalkiRecorder() {
   const [error, setError] = useState<string | null>(null);
 
   const startRecording = async () => {
-    if (
-      operationInProgress.current ||
-      recorderState.isRecording
-    ) {
+    if (operationInProgress.current || recorderState.isRecording) {
       return;
     }
 
@@ -40,13 +37,10 @@ export function useWalkiRecorder() {
         player.pause();
       }
 
-      const permission =
-        await AudioModule.requestRecordingPermissionsAsync();
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
 
       if (!permission.granted) {
-        setError(
-          "Microphone permission is required to send voice messages.",
-        );
+        setError("Microphone permission is required to send voice messages.");
 
         return;
       }
@@ -71,10 +65,7 @@ export function useWalkiRecorder() {
   };
 
   const stopRecording = async () => {
-    if (
-      operationInProgress.current ||
-      !recorderState.isRecording
-    ) {
+    if (operationInProgress.current || !recorderState.isRecording) {
       return null;
     }
 
@@ -99,8 +90,8 @@ export function useWalkiRecorder() {
     }
   };
 
-  const playRecording = async () => {
-    if (!audioUri) {
+  const playRecordingFromUri = async (uri: string) => {
+    if (!uri) {
       return;
     }
 
@@ -115,7 +106,7 @@ export function useWalkiRecorder() {
 
       player.volume = 1;
 
-      player.replace(audioUri);
+      player.replace(uri);
 
       await player.seekTo(0);
 
@@ -125,6 +116,14 @@ export function useWalkiRecorder() {
 
       setError("Walki could not play this recording.");
     }
+  };
+
+  const playRecording = async () => {
+    if (!audioUri) {
+      return;
+    }
+
+    await playRecordingFromUri(audioUri);
   };
 
   const stopPlayback = () => {
@@ -157,6 +156,7 @@ export function useWalkiRecorder() {
     stopRecording,
 
     playRecording,
+    playRecordingFromUri,
     stopPlayback,
 
     clearRecording,
