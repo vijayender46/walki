@@ -84,7 +84,7 @@ export default function HomeScreen() {
       }
     };
 
-    loadKids();
+    void loadKids();
 
     return () => {
       isMounted = false;
@@ -93,6 +93,14 @@ export default function HomeScreen() {
 
   const handleCreateFirstFamily = () => {
     router.push("/family/create");
+  };
+
+  const handleJoinExistingFamily = () => {
+    router.push("/family/parent-join");
+  };
+
+  const handleAddParent = () => {
+    router.push("/family/parent-invite");
   };
 
   const handleAddAnotherKid = async () => {
@@ -136,7 +144,6 @@ export default function HomeScreen() {
 
   const handleTalkStart = () => {
     setUploadedAudioKey(null);
-
     void startRecording();
   };
 
@@ -256,17 +263,41 @@ export default function HomeScreen() {
       </Text>
 
       {profile.role === "parent" && !profile.familyId ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add my kid"
-          onPress={handleCreateFirstFamily}
-          style={({ pressed }) => [
-            styles.familyButton,
-            pressed && styles.familyButtonPressed,
-          ]}
-        >
-          <Text style={styles.familyButtonText}>Add my kid</Text>
-        </Pressable>
+        <View style={styles.noFamilySection}>
+          <Text style={styles.sectionEyebrow}>WALKI FAMILY</Text>
+
+          <Text style={styles.noFamilyTitle}>Connect your family</Text>
+
+          <Text style={styles.noFamilyText}>
+            Start a new Walki family or join one created by another parent.
+          </Text>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Create a Walki family"
+            onPress={handleCreateFirstFamily}
+            style={({ pressed }) => [
+              styles.familyButton,
+              pressed && styles.familyButtonPressed,
+            ]}
+          >
+            <Text style={styles.familyButtonText}>Create family</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Join existing Walki family"
+            onPress={handleJoinExistingFamily}
+            style={({ pressed }) => [
+              styles.joinFamilyButton,
+              pressed && styles.joinFamilyButtonPressed,
+            ]}
+          >
+            <Text style={styles.joinFamilyButtonText}>
+              Join existing family
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {profile.role === "parent" && profile.familyId ? (
@@ -361,6 +392,26 @@ export default function HomeScreen() {
               Add your first kid to start your Walki family.
             </Text>
           ) : null}
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Add another parent"
+            onPress={handleAddParent}
+            style={({ pressed }) => [
+              styles.addParentButton,
+              pressed && styles.addParentButtonPressed,
+            ]}
+          >
+            <Text style={styles.addParentSymbol}>+</Text>
+
+            <View style={styles.addParentTextContainer}>
+              <Text style={styles.addParentTitle}>Add parent</Text>
+
+              <Text style={styles.addParentSubtitle}>
+                Invite another parent to this family
+              </Text>
+            </View>
+          </Pressable>
 
           {familyError ? (
             <Text style={styles.errorText}>{familyError}</Text>
@@ -539,9 +590,33 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
 
+  noFamilySection: {
+    width: "100%",
+    alignItems: "center",
+    marginTop: spacing.xxxl,
+    padding: spacing.xl,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+  },
+
+  noFamilyTitle: {
+    ...typography.title,
+    fontSize: 24,
+    textAlign: "center",
+    color: colors.textPrimary,
+    marginTop: spacing.sm,
+  },
+
+  noFamilyText: {
+    ...typography.body,
+    textAlign: "center",
+    color: colors.textSecondary,
+    marginTop: spacing.md,
+  },
+
   familyButton: {
     minHeight: 54,
-    minWidth: 180,
+    width: "100%",
     paddingHorizontal: spacing.xl,
     alignItems: "center",
     justifyContent: "center",
@@ -558,6 +633,28 @@ const styles = StyleSheet.create({
   familyButtonText: {
     ...typography.button,
     color: colors.white,
+  },
+
+  joinFamilyButton: {
+    minHeight: 52,
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    backgroundColor: colors.background,
+    marginTop: spacing.md,
+  },
+
+  joinFamilyButtonPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.8,
+  },
+
+  joinFamilyButtonText: {
+    ...typography.button,
+    color: colors.primary,
   },
 
   familySection: {
@@ -664,6 +761,54 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: spacing.sm,
+  },
+
+  addParentButton: {
+    width: "100%",
+    minHeight: 68,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    marginTop: spacing.md,
+  },
+
+  addParentButtonPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.8,
+  },
+
+  addParentSymbol: {
+    width: 38,
+    height: 38,
+    textAlign: "center",
+    lineHeight: 36,
+    fontSize: 28,
+    fontWeight: "500",
+    color: colors.primary,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 19,
+  },
+
+  addParentTextContainer: {
+    flex: 1,
+    marginLeft: spacing.md,
+  },
+
+  addParentTitle: {
+    ...typography.body,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+
+  addParentSubtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 
   errorText: {

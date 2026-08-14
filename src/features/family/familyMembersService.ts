@@ -1,9 +1,7 @@
 import {
-    collection,
-    getDocs,
-    getFirestore,
-    query,
-    where,
+  collection,
+  getDocs,
+  getFirestore,
 } from "@react-native-firebase/firestore";
 
 import type { UserProfile } from "@/features/auth/types";
@@ -15,13 +13,18 @@ export async function getFamilyKids(familyId: string): Promise<UserProfile[]> {
 
   const db = getFirestore();
 
-  const kidsQuery = query(
-    collection(db, "users"),
-    where("familyId", "==", familyId),
-    where("role", "==", "kid"),
-  );
+  /*
+   * IMPORTANT:
+   *
+   * Kids now come from the stable logical-kid collection,
+   * NOT from users/{deviceUid}.
+   *
+   * A kid can reconnect to many devices over time, but
+   * there must only ever be one logical kidId shown here.
+   */
+  const kidsRef = collection(db, "families", familyId, "kids");
 
-  const snapshot = await getDocs(kidsQuery);
+  const snapshot = await getDocs(kidsRef);
 
   const kids: UserProfile[] = [];
 
@@ -32,12 +35,50 @@ export async function getFamilyKids(familyId: string): Promise<UserProfile[]> {
       continue;
     }
 
-    const profile = data as UserProfile;
-
-    if (profile.role === "kid") {
-      kids.push(profile);
+    /*
+     * Soft-deleted kids will be hidden automatically
+     * once we add the Delete Kid feature.
+     */
+    if (data.status === "removed") {
+      continue;
     }
+
+    const kidId = String(data.kidId ?? documentSnapshot.id);
+
+    const displayName = String(data.displayName ?? "Kid");
+
+    const theme = data.theme === "blue" ? "blue" : "pink";
+
+    /*
+     * Keep the current Home API compatible for now.
+     *
+     * uid intentionally becomes the STABLE kidId,
+     * not the current deviceUid.
+     *
+     * We will update the kid profile screen next so
+     * /kid/[uid] also treats uid as kidId.
+     */
+    const profile: UserProfile = {
+      ...data,
+
+      uid: kidId,
+      phone: "",
+      role: "kid",
+      displayName,
+      theme,
+      familyId,
+    } as UserProfile;
+
+    kids.push(profile);
   }
+
+  /*
+   * Stable ordering prevents kid circles jumping around
+   * between app refreshes.
+   */
+  kids.sort((a, b) =>
+    (a.displayName || "Kid").localeCompare(b.displayName || "Kid"),
+  );
 
   return kids;
 }

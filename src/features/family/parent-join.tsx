@@ -1,20 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useState } from "react";
-
 import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 
-import { joinFamilyWithCode } from "@/features/family/kidJoinService";
+import { useAuth } from "@/features/auth/AuthContext";
+import { joinFamilyAsParent } from "@/features/family/parentJoinService";
 import { colors, radius, spacing, typography } from "@/theme";
 
-export default function KidJoinScreen() {
+export default function ParentJoinScreen() {
+  const { refreshProfile } = useAuth();
+
   const [code, setCode] = useState("");
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,9 +24,8 @@ export default function KidJoinScreen() {
   const isValid = /^\d{6}$/.test(code);
 
   const handleCodeChange = (value: string) => {
-    const cleaned = value.replace(/\D/g, "").slice(0, 6);
+    setCode(value.replace(/\D/g, "").slice(0, 6));
 
-    setCode(cleaned);
     setError(null);
   };
 
@@ -37,38 +38,40 @@ export default function KidJoinScreen() {
       setIsJoining(true);
       setError(null);
 
-      const result = await joinFamilyWithCode(code);
+      await joinFamilyAsParent(code);
 
-      router.replace({
-        pathname: "/kid/setup",
-        params: {
-          familyId: result.familyId,
-        },
-      });
+      await refreshProfile();
+
+      router.replace("/home");
     } catch (err: unknown) {
-      console.error("Kid join error:", err);
+      console.error("Parent family join error:", err);
 
       const message = err instanceof Error ? err.message : "";
 
       switch (message) {
         case "INVITE_NOT_FOUND":
-          setError("We couldn't find that invite code.");
+          setError("We couldn't find that parent invite.");
           break;
 
         case "INVITE_ALREADY_USED":
-          setError("That invite code has already been used.");
+          setError("That parent invite has already been used.");
           break;
 
-        case "INVITE_NOT_FOR_KID":
-          setError("This invite is for a parent, not a kid device.");
+        case "INVITE_NOT_FOR_PARENT":
+          setError("This invite is for a kid device, not a parent.");
           break;
 
-        case "KID_DEVICE_ALREADY_SIGNED_IN":
-          setError("This device is already signed in to another account.");
+        case "ALREADY_IN_FAMILY":
+          setError("This parent account already belongs to a Walki family.");
+          break;
+
+        case "PARENT_ACCOUNT_REQUIRED":
+        case "PARENT_PROFILE_REQUIRED":
+          setError("Please sign in with a completed parent account first.");
           break;
 
         default:
-          setError("We couldn't connect your device. Please try again.");
+          setError("We couldn't join this Walki family. Please try again.");
       }
     } finally {
       setIsJoining(false);
@@ -81,29 +84,23 @@ export default function KidJoinScreen() {
         accessibilityRole="button"
         accessibilityLabel="Go back"
         hitSlop={12}
-        onPress={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.replace("/welcome");
-          }
-        }}
+        onPress={() => router.back()}
         style={styles.backButton}
       >
         <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
       </Pressable>
 
       <View style={styles.content}>
-        <Text style={styles.eyebrow}>KID DEVICE</Text>
+        <Text style={styles.eyebrow}>PARENT INVITE</Text>
 
         <Text style={styles.title}>Join your family</Text>
 
         <Text style={styles.subtitle}>
-          Ask your parent for the 6-digit Walki code.
+          Enter the 6-digit parent invite from an existing Walki parent.
         </Text>
 
         <TextInput
-          accessibilityLabel="Family invite code"
+          accessibilityLabel="Parent family invite code"
           autoFocus
           keyboardType="number-pad"
           maxLength={6}
@@ -118,7 +115,7 @@ export default function KidJoinScreen() {
 
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Join family"
+          accessibilityLabel="Join Walki family"
           disabled={!isValid || isJoining}
           onPress={handleJoin}
           style={({ pressed }) => [
@@ -165,7 +162,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1.4,
     textAlign: "center",
-    color: "#FF5CA8",
+    color: colors.primary,
   },
 
   title: {
@@ -209,7 +206,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: radius.md,
-    backgroundColor: "#FF5CA8",
+    backgroundColor: colors.primary,
     marginTop: spacing.xxl,
   },
 
