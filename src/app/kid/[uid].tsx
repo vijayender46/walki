@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import {
   ActivityIndicator,
   Alert,
@@ -10,19 +11,43 @@ import {
 } from "react-native";
 
 import { Ionicons } from "@expo/vector-icons";
+
 import { doc, getDoc, getFirestore } from "@react-native-firebase/firestore";
+
 import { router, useLocalSearchParams } from "expo-router";
 
+import { TalkButton } from "@/components/TalkButton";
+
+import { uploadWalkiAudio } from "@/features/audio/audioUploadService";
+
+import { useWalkiRecorder } from "@/features/audio/useWalkiRecorder";
+
+import { publishKidMessage } from "@/features/audio/walkiChannelService";
+
 import { useAuth } from "@/features/auth/AuthContext";
+
 import type { UserProfile } from "@/features/auth/types";
-import { createReconnectKidInvite } from "@/features/family/familyService";
+
+import {
+  disableKidPairing,
+  enableKidPairing,
+  ensureKidPairCode,
+} from "@/features/family/kidPairingService";
+
 import { removeKidFromFamily } from "@/features/family/kidLifecycleService";
+
 import { colors, radius, spacing, typography } from "@/theme";
 
 type StableKidProfile = UserProfile & {
   kidId: string;
+
   deviceUid?: string | null;
+
   status?: string;
+
+  pairCode?: string | null;
+
+  pairingEnabled?: boolean;
 };
 
 export default function KidProfileScreen() {
@@ -38,42 +63,85 @@ export default function KidProfileScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
-  const [isCreatingReconnect, setIsCreatingReconnect] = useState(false);
+  /*
+   * ========================================
+   * PERMANENT PAIRING CODE
+   * ========================================
+   */
 
-  const [reconnectCode, setReconnectCode] = useState<string | null>(null);
+  const [pairCode, setPairCode] = useState<string | null>(null);
 
-  const [reconnectError, setReconnectError] = useState<string | null>(null);
+  const [isPairingEnabled, setIsPairingEnabled] = useState(false);
+
+  const [isUpdatingPairing, setIsUpdatingPairing] = useState(false);
+
+  const [pairingError, setPairingError] = useState<string | null>(null);
+
+  /*
+   * ========================================
+   * REMOVE KID
+   * ========================================
+   */
 
   const [isRemovingKid, setIsRemovingKid] = useState(false);
 
   const [removeError, setRemoveError] = useState<string | null>(null);
 
+  /*
+   * ========================================
+   * DIRECT WALKI
+   * ========================================
+   */
+
+  const [isSendingWalki, setIsSendingWalki] = useState(false);
+
+  const [walkiSendError, setWalkiSendError] = useState<string | null>(null);
+
+  const [walkiSent, setWalkiSent] = useState(false);
+
+  const {
+    isRecording,
+
+    error: recordingError,
+
+    startRecording,
+    stopRecording,
+  } = useWalkiRecorder();
+
+  /*
+   * ========================================
+   * LOAD STABLE KID
+   * ========================================
+   */
+
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
     const loadKid = async () => {
       if (!uid) {
         setError("Kid profile ID is missing.");
+
         setIsLoading(false);
+
         return;
       }
 
       if (currentProfile?.role !== "parent" || !currentProfile.familyId) {
         setError("Family profile is unavailable.");
+
         setIsLoading(false);
+
         return;
       }
 
       try {
         setIsLoading(true);
+
         setError(null);
+        setPairingError(null);
 
         const db = getFirestore();
 
-        /*
-         * uid in this route is now the stable kidId,
-         * not a Firebase device UID.
-         */
         const kidRef = doc(
           db,
           "families",
@@ -84,12 +152,13 @@ export default function KidProfileScreen() {
 
         const snapshot = await getDoc(kidRef);
 
-        if (!isMounted) {
+        if (!mounted) {
           return;
         }
 
         if (!snapshot.exists()) {
           setError("Kid profile could not be found.");
+
           return;
         }
 
@@ -97,23 +166,24 @@ export default function KidProfileScreen() {
 
         if (!data) {
           setError("Kid profile could not be found.");
+
           return;
         }
 
         if (data.status === "removed") {
           setError("This kid has been removed from the family.");
+
           return;
         }
+
+        const stableKidId = String(data.kidId ?? uid);
 
         const stableKid: StableKidProfile = {
           ...data,
 
-          /*
-           * Home and routing use uid as the stable kidId.
-           */
           uid,
 
-          kidId: String(data.kidId ?? uid),
+          kidId: stableKidId,
 
           deviceUid: typeof data.deviceUid === "string" ? data.deviceUid : null,
 
@@ -127,18 +197,76 @@ export default function KidProfileScreen() {
 
           familyId: currentProfile.familyId,
 
+          createdAt: data.createdAt,
+
+          updatedAt: data.updatedAt,
+
           status: typeof data.status === "string" ? data.status : undefined,
-        } as StableKidProfile;
+
+          pairCode: typeof data.pairCode === "string" ? data.pairCode : null,
+
+          pairingEnabled: data.pairingEnabled === true,
+        };
+
+        if (!mounted) {
+          return;
+        }
 
         setKid(stableKid);
-      } catch (loadError) {
-        console.error("Load stable kid profile error:", loadError);
 
-        if (isMounted) {
+        setIsPairingEnabled(data.pairingEnabled === true);
+
+        /*
+         * ==================================
+         * ENSURE ONE PERMANENT DEVICE CODE
+         * ==================================
+         *
+         * Existing permanent code:
+         * → returns same code
+         *
+         * Legacy kid without code:
+         * → creates one once
+         */
+
+        try {
+          const result = await ensureKidPairCode({
+            familyId: currentProfile.familyId,
+
+            kidId: stableKidId,
+          });
+
+          if (!mounted) {
+            return;
+          }
+
+          setPairCode(result.pairCode);
+
+          setKid((currentKid) => {
+            if (!currentKid) {
+              return currentKid;
+            }
+
+            return {
+              ...currentKid,
+
+              pairCode: result.pairCode,
+            };
+          });
+        } catch (pairCodeError) {
+          console.error("Ensure kid pair code error:", pairCodeError);
+
+          if (mounted) {
+            setPairingError("We couldn't load this kid's device code.");
+          }
+        }
+      } catch (loadError) {
+        console.error("Load stable kid error:", loadError);
+
+        if (mounted) {
           setError("We couldn't load this kid profile.");
         }
       } finally {
-        if (isMounted) {
+        if (mounted) {
           setIsLoading(false);
         }
       }
@@ -147,55 +275,183 @@ export default function KidProfileScreen() {
     void loadKid();
 
     return () => {
-      isMounted = false;
+      mounted = false;
     };
   }, [uid, currentProfile?.familyId, currentProfile?.role]);
 
-  const getInitial = (name: string) => {
-    const cleanedName = name.trim();
+  /*
+   * ========================================
+   * DIRECT PARENT → KID WALKI
+   * ========================================
+   */
 
-    if (!cleanedName) {
-      return "K";
-    }
-
-    return cleanedName.charAt(0).toUpperCase();
-  };
-
-  const handleReconnectDevice = async () => {
-    if (!kid || !kid.familyId || isCreatingReconnect) {
+  const handleTalkStart = async () => {
+    if (!kid || isSendingWalki || isRemovingKid) {
       return;
     }
 
-    /*
-     * Current reconnect service still resolves the
-     * existing kid through users/{deviceUid}.
-     *
-     * Passing deviceUid here keeps that flow working
-     * while the screen itself uses stable kidId.
-     */
-    const reconnectTargetUid = kid.deviceUid ?? kid.uid;
-
     try {
-      setIsCreatingReconnect(true);
-      setReconnectError(null);
-      setReconnectCode(null);
+      setWalkiSendError(null);
 
-      const result = await createReconnectKidInvite(
-        kid.familyId,
-        reconnectTargetUid,
-      );
+      setWalkiSent(false);
 
-      setReconnectCode(result.inviteCode);
-    } catch (reconnectErrorValue) {
-      console.error("Create reconnect invite error:", reconnectErrorValue);
+      await startRecording();
+    } catch (talkError) {
+      console.error("Direct Walki start error:", talkError);
 
-      setReconnectError(
-        "We couldn't create a reconnect code. Please try again.",
-      );
-    } finally {
-      setIsCreatingReconnect(false);
+      setWalkiSendError("We couldn't start recording.");
     }
   };
+
+  const handleTalkEnd = async () => {
+    if (!kid || !kid.familyId || isSendingWalki) {
+      return;
+    }
+
+    try {
+      const audioUri = await stopRecording();
+
+      if (!audioUri) {
+        return;
+      }
+
+      setIsSendingWalki(true);
+
+      setWalkiSendError(null);
+
+      const uploadResult = await uploadWalkiAudio({
+        audioUri,
+
+        familyId: kid.familyId,
+      });
+
+      await publishKidMessage({
+        familyId: kid.familyId,
+
+        kidId: kid.kidId,
+
+        audioKey: uploadResult.key,
+
+        senderKidId: null,
+      });
+
+      setWalkiSent(true);
+
+      console.log("Direct Walki transmission published:", {
+        kidId: kid.kidId,
+
+        audioKey: uploadResult.key,
+      });
+    } catch (talkError) {
+      console.error("Direct Walki send error:", talkError);
+
+      setWalkiSendError("We couldn't send this Walki message.");
+    } finally {
+      setIsSendingWalki(false);
+    }
+  };
+
+  /*
+   * ========================================
+   * ENABLE PERMANENT-CODE RECONNECT
+   * ========================================
+   *
+   * The 6-digit code stays the same.
+   *
+   * Parent only temporarily enables replacement.
+   */
+
+  const handleEnableReconnect = async () => {
+    if (!kid?.familyId || isUpdatingPairing) {
+      return;
+    }
+
+    try {
+      setIsUpdatingPairing(true);
+
+      setPairingError(null);
+
+      const result = await enableKidPairing({
+        familyId: kid.familyId,
+
+        kidId: kid.kidId,
+      });
+
+      setPairCode(result.pairCode);
+
+      setIsPairingEnabled(true);
+
+      setKid((currentKid) => {
+        if (!currentKid) {
+          return currentKid;
+        }
+
+        return {
+          ...currentKid,
+
+          pairCode: result.pairCode,
+
+          pairingEnabled: true,
+        };
+      });
+    } catch (pairingEnableError) {
+      console.error("Enable kid pairing error:", pairingEnableError);
+
+      setPairingError("We couldn't enable device reconnect.");
+    } finally {
+      setIsUpdatingPairing(false);
+    }
+  };
+
+  /*
+   * ========================================
+   * CANCEL RECONNECT MODE
+   * ========================================
+   */
+
+  const handleCancelReconnect = async () => {
+    if (!kid?.familyId || isUpdatingPairing) {
+      return;
+    }
+
+    try {
+      setIsUpdatingPairing(true);
+
+      setPairingError(null);
+
+      await disableKidPairing({
+        familyId: kid.familyId,
+
+        kidId: kid.kidId,
+      });
+
+      setIsPairingEnabled(false);
+
+      setKid((currentKid) => {
+        if (!currentKid) {
+          return currentKid;
+        }
+
+        return {
+          ...currentKid,
+
+          pairingEnabled: false,
+        };
+      });
+    } catch (pairingDisableError) {
+      console.error("Disable kid pairing error:", pairingDisableError);
+
+      setPairingError("We couldn't cancel reconnect mode.");
+    } finally {
+      setIsUpdatingPairing(false);
+    }
+  };
+
+  /*
+   * ========================================
+   * REMOVE KID
+   * ========================================
+   */
 
   const performRemoveKid = async () => {
     if (!kid || !kid.familyId || isRemovingKid) {
@@ -204,21 +460,18 @@ export default function KidProfileScreen() {
 
     try {
       setIsRemovingKid(true);
+
       setRemoveError(null);
 
       await removeKidFromFamily(kid.familyId, kid.kidId);
 
       console.log("Kid removed from Walki family:", kid.kidId);
 
-      /*
-       * Replace rather than back so we don't leave
-       * a removed kid profile in navigation history.
-       */
       router.replace("/home");
     } catch (removeKidError) {
       console.error("Remove kid error:", removeKidError);
 
-      setRemoveError("We couldn't remove this kid. Please try again.");
+      setRemoveError("We couldn't remove this kid.");
 
       setIsRemovingKid(false);
     }
@@ -231,15 +484,21 @@ export default function KidProfileScreen() {
 
     Alert.alert(
       `Remove ${kid.displayName || "this kid"}?`,
-      "This will disconnect their Walki device and remove them from your family. They can be added again later with a new invite.",
+
+      "This disconnects their Walki device and removes them from your family. They can be added again later.",
+
       [
         {
           text: "Cancel",
+
           style: "cancel",
         },
+
         {
           text: "Remove kid",
+
           style: "destructive",
+
           onPress: () => {
             void performRemoveKid();
           },
@@ -248,20 +507,44 @@ export default function KidProfileScreen() {
     );
   };
 
+  /*
+   * ========================================
+   * HELPERS
+   * ========================================
+   */
+
+  const getInitial = (name: string) => {
+    const clean = name.trim();
+
+    return clean ? clean.charAt(0).toUpperCase() : "K";
+  };
+
+  /*
+   * ========================================
+   * LOADING
+   * ========================================
+   */
+
   if (isLoading) {
     return (
-      <View style={styles.centeredContainer}>
+      <View style={styles.centered}>
         <ActivityIndicator size="large" color={colors.primary} />
 
-        <Text style={styles.loadingText}>Loading kid profile...</Text>
+        <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
   }
 
+  /*
+   * ========================================
+   * ERROR
+   * ========================================
+   */
+
   if (error || !kid) {
     return (
-      <View style={styles.centeredContainer}>
-        <Ionicons name="alert-circle-outline" size={52} color={colors.danger} />
+      <View style={styles.centered}>
+        <Ionicons name="alert-circle-outline" size={48} color={colors.danger} />
 
         <Text style={styles.errorTitle}>Unable to open profile</Text>
 
@@ -269,6 +552,40 @@ export default function KidProfileScreen() {
           {error ?? "Kid profile could not be found."}
         </Text>
 
+        <Pressable
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/home");
+            }
+          }}
+          style={styles.backAction}
+        >
+          <Text style={styles.backActionText}>Go back</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const pink = kid.theme === "pink";
+
+  /*
+   * ========================================
+   * SCREEN
+   * ========================================
+   */
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      {/*
+       * HEADER
+       */}
+
+      <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -279,179 +596,238 @@ export default function KidProfileScreen() {
               router.replace("/home");
             }
           }}
-          style={({ pressed }) => [
-            styles.backButton,
-            pressed && styles.buttonPressed,
-          ]}
+          style={styles.headerButton}
         >
-          <Text style={styles.backButtonText}>Go back</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.textPrimary} />
         </Pressable>
+
+        <Text style={styles.headerTitle}>Kid Walki</Text>
+
+        <View style={styles.headerPlaceholder} />
       </View>
-    );
-  }
 
-  const isPink = kid.theme === "pink";
+      {/*
+       * PROFILE
+       */}
 
-  return (
-    <ScrollView
-      contentContainerStyle={styles.container}
-      showsVerticalScrollIndicator={false}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        hitSlop={12}
-        onPress={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.replace("/home");
-          }
-        }}
-        style={styles.headerBackButton}
-      >
-        <Ionicons name="arrow-back" size={24} color={colors.textPrimary} />
-      </Pressable>
-
-      <View style={styles.profileSection}>
+      <View style={styles.profileRow}>
         <View
-          style={[
-            styles.avatar,
-            isPink ? styles.avatarPink : styles.avatarBlue,
-          ]}
+          style={[styles.avatar, pink ? styles.avatarPink : styles.avatarBlue]}
         >
           <Text style={styles.avatarText}>{getInitial(kid.displayName)}</Text>
         </View>
 
-        <Text style={styles.name}>{kid.displayName || "Kid"}</Text>
+        <View style={styles.profileText}>
+          <Text style={styles.name}>{kid.displayName}</Text>
 
-        <Text style={styles.status}>Family connected</Text>
-      </View>
+          <View style={styles.connectedRow}>
+            <View style={styles.connectedDot} />
 
-      <View style={styles.infoCard}>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Profile</Text>
-
-          <Text style={styles.infoValue}>Kid account</Text>
-        </View>
-
-        <View style={styles.divider} />
-
-        <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Connection</Text>
-
-          <Text style={styles.connectedText}>Connected</Text>
+            <Text style={styles.connectedText}>Connected</Text>
+          </View>
         </View>
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Talk to ${kid.displayName || "kid"}`}
-        onPress={() => {
-          console.log("Talk pressed for stable kid:", kid.kidId);
-        }}
-        style={({ pressed }) => [
-          styles.talkButton,
-          pressed && styles.talkButtonPressed,
-        ]}
-      >
-        <Ionicons name="mic" size={26} color={colors.white} />
+      {/*
+       * ======================================
+       * DIRECT TALK
+       * ======================================
+       */}
 
-        <Text style={styles.talkButtonText}>
-          Talk to {kid.displayName || "Kid"}
-        </Text>
-      </Pressable>
-
-      <Text style={styles.helperText}>
-        Push-to-talk will connect here next.
-      </Text>
-
-      <View style={styles.deviceSection}>
-        <Text style={styles.deviceTitle}>Kid device</Text>
-
-        <Text style={styles.deviceDescription}>
-          If this kid changed device, reinstalled Walki, or lost their
-          connection, create a new one-time reconnect code.
+      <View style={styles.talkCard}>
+        <Text style={styles.talkHeadline}>
+          {isRecording
+            ? `Talking to ${kid.displayName}...`
+            : isSendingWalki
+              ? "Sending..."
+              : `Talk to ${kid.displayName}`}
         </Text>
 
-        {!reconnectCode ? (
+        <Text style={styles.talkSubheadline}>
+          {isRecording ? "Release to send" : "Hold the mic while you speak"}
+        </Text>
+
+        <View style={styles.talkButtonWrap}>
+          <TalkButton
+            kidMode
+            isRecording={isRecording}
+            isSending={isSendingWalki}
+            disabled={isSendingWalki || isRemovingKid}
+            onPressIn={() => {
+              void handleTalkStart();
+            }}
+            onPressOut={() => {
+              void handleTalkEnd();
+            }}
+          />
+        </View>
+
+        {walkiSent && !isSendingWalki ? (
+          <View style={styles.successPill}>
+            <Ionicons name="checkmark-circle" size={18} color="#16A34A" />
+
+            <Text style={styles.successText}>Walki sent</Text>
+          </View>
+        ) : null}
+
+        {walkiSendError || recordingError ? (
+          <Text style={styles.inlineError}>
+            {walkiSendError || recordingError}
+          </Text>
+        ) : null}
+      </View>
+
+      {/*
+       * ======================================
+       * PERMANENT DEVICE CODE
+       * ======================================
+       */}
+
+      <View style={styles.settingsCard}>
+        <View style={styles.settingsTitleRow}>
+          <Ionicons name="key-outline" size={21} color={colors.primary} />
+
+          <Text style={styles.settingsTitle}>Device code</Text>
+        </View>
+
+        <Text style={styles.settingsDescription}>
+          This permanent code belongs to {kid.displayName}. Reuse it if this kid
+          changes device or reinstalls Walki.
+        </Text>
+
+        {pairCode ? (
+          <View style={styles.codeCard}>
+            <Text style={styles.codeLabel}>DEVICE CODE</Text>
+
+            <Text style={styles.code}>{pairCode}</Text>
+
+            <Text style={styles.codeHelp}>
+              Keep this code private. It remains linked to {kid.displayName}.
+            </Text>
+          </View>
+        ) : (
+          <ActivityIndicator
+            color={colors.primary}
+            style={styles.pairCodeLoader}
+          />
+        )}
+
+        {!isPairingEnabled ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Reconnect kid device"
-            disabled={isCreatingReconnect}
-            onPress={handleReconnectDevice}
+            accessibilityLabel="Allow new kid device"
+            disabled={isUpdatingPairing || !pairCode}
+            onPress={() => {
+              void handleEnableReconnect();
+            }}
             style={({ pressed }) => [
               styles.reconnectButton,
-              isCreatingReconnect && styles.reconnectButtonDisabled,
-              pressed && !isCreatingReconnect && styles.reconnectButtonPressed,
+
+              (isUpdatingPairing || !pairCode) && styles.buttonDisabled,
+
+              pressed && !isUpdatingPairing && pairCode && styles.buttonPressed,
             ]}
           >
-            {isCreatingReconnect ? (
+            {isUpdatingPairing ? (
               <ActivityIndicator color={colors.primary} />
             ) : (
               <>
                 <Ionicons
-                  name="link-outline"
-                  size={21}
+                  name="refresh-outline"
+                  size={19}
                   color={colors.primary}
                 />
 
-                <Text style={styles.reconnectButtonText}>Reconnect device</Text>
+                <Text style={styles.reconnectText}>Allow new device</Text>
               </>
             )}
           </Pressable>
         ) : (
-          <View style={styles.reconnectCodeCard}>
-            <Text style={styles.reconnectCodeLabel}>RECONNECT CODE</Text>
+          <>
+            <View style={styles.readyCard}>
+              <Ionicons name="radio-outline" size={21} color="#15803D" />
 
-            <Text style={styles.reconnectCode}>{reconnectCode}</Text>
+              <View style={styles.readyTextWrap}>
+                <Text style={styles.readyTitle}>Ready to reconnect</Text>
 
-            <Text style={styles.reconnectCodeHelp}>
-              Enter this code on {kid.displayName || "the kid"}
-              &apos;s device.
+                <Text style={styles.readyDescription}>
+                  Enter {pairCode} on {kid.displayName}&apos;s new device.
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.settingsDescription}>
+              Reconnect mode switches off automatically once the new device
+              successfully connects.
             </Text>
-          </View>
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel kid device reconnect"
+              disabled={isUpdatingPairing}
+              onPress={() => {
+                void handleCancelReconnect();
+              }}
+              style={({ pressed }) => [
+                styles.cancelReconnectButton,
+
+                isUpdatingPairing && styles.buttonDisabled,
+
+                pressed && !isUpdatingPairing && styles.buttonPressed,
+              ]}
+            >
+              {isUpdatingPairing ? (
+                <ActivityIndicator color={colors.textSecondary} />
+              ) : (
+                <Text style={styles.cancelReconnectText}>Cancel reconnect</Text>
+              )}
+            </Pressable>
+          </>
         )}
 
-        {reconnectError ? (
-          <Text style={styles.reconnectError}>{reconnectError}</Text>
+        {pairingError ? (
+          <Text style={styles.inlineError}>{pairingError}</Text>
         ) : null}
       </View>
 
-      <View style={styles.dangerSection}>
-        <Text style={styles.dangerTitle}>Remove from family</Text>
+      {/*
+       * ======================================
+       * REMOVE KID
+       * ======================================
+       */}
 
-        <Text style={styles.dangerDescription}>
-          Removing this kid disconnects their Walki device and removes their
-          access to this family.
-        </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${kid.displayName} from family`}
+        disabled={isRemovingKid || isRecording || isSendingWalki}
+        onPress={handleRemoveKid}
+        style={({ pressed }) => [
+          styles.removeButton,
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Remove ${kid.displayName || "kid"} from family`}
-          disabled={isRemovingKid}
-          onPress={handleRemoveKid}
-          style={({ pressed }) => [
-            styles.removeButton,
-            isRemovingKid && styles.removeButtonDisabled,
-            pressed && !isRemovingKid && styles.removeButtonPressed,
-          ]}
-        >
-          {isRemovingKid ? (
-            <ActivityIndicator color={colors.danger} />
-          ) : (
-            <>
-              <Ionicons name="trash-outline" size={21} color={colors.danger} />
+          (isRemovingKid || isRecording || isSendingWalki) &&
+            styles.buttonDisabled,
 
-              <Text style={styles.removeButtonText}>Remove kid</Text>
-            </>
-          )}
-        </Pressable>
+          pressed &&
+            !isRemovingKid &&
+            !isRecording &&
+            !isSendingWalki &&
+            styles.buttonPressed,
+        ]}
+      >
+        {isRemovingKid ? (
+          <ActivityIndicator color={colors.danger} />
+        ) : (
+          <>
+            <Ionicons name="trash-outline" size={19} color={colors.danger} />
 
-        {removeError ? (
-          <Text style={styles.removeError}>{removeError}</Text>
-        ) : null}
-      </View>
+            <Text style={styles.removeText}>Remove from family</Text>
+          </>
+        )}
+      </Pressable>
+
+      {removeError ? (
+        <Text style={styles.inlineError}>{removeError}</Text>
+      ) : null}
     </ScrollView>
   );
 }
@@ -459,40 +835,83 @@ export default function KidProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    paddingHorizontal: spacing.xl,
-    paddingTop: 48,
-    paddingBottom: spacing.xxxl,
+
+    paddingHorizontal: spacing.lg,
+
+    paddingTop: 18,
+    paddingBottom: 26,
+
     backgroundColor: colors.background,
   },
 
-  centeredContainer: {
+  centered: {
     flex: 1,
+
     alignItems: "center",
+
     justifyContent: "center",
+
     paddingHorizontal: spacing.xl,
+
     backgroundColor: colors.background,
   },
 
-  headerBackButton: {
-    width: 46,
-    height: 46,
+  header: {
+    flexDirection: "row",
+
     alignItems: "center",
+
+    justifyContent: "space-between",
+  },
+
+  headerButton: {
+    width: 42,
+    height: 42,
+
+    alignItems: "center",
+
     justifyContent: "center",
+
     borderRadius: radius.round,
+
     backgroundColor: colors.surface,
   },
 
-  profileSection: {
+  headerTitle: {
+    ...typography.body,
+
+    fontWeight: "700",
+
+    color: colors.textPrimary,
+  },
+
+  headerPlaceholder: {
+    width: 42,
+  },
+
+  profileRow: {
+    flexDirection: "row",
+
     alignItems: "center",
-    marginTop: spacing.xxxl,
+
+    marginTop: 18,
+
+    padding: 14,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.surface,
   },
 
   avatar: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    width: 64,
+    height: 64,
+
     alignItems: "center",
+
     justifyContent: "center",
+
+    borderRadius: 32,
   },
 
   avatarBlue: {
@@ -504,266 +923,381 @@ const styles = StyleSheet.create({
   },
 
   avatarText: {
-    fontSize: 44,
+    fontSize: 26,
+
     fontWeight: "800",
+
     color: colors.white,
+  },
+
+  profileText: {
+    flex: 1,
+
+    marginLeft: 13,
   },
 
   name: {
     ...typography.title,
-    fontSize: 30,
+
+    fontSize: 24,
+
     color: colors.textPrimary,
-    marginTop: spacing.lg,
   },
 
-  status: {
-    ...typography.caption,
-    color: colors.primary,
-    marginTop: spacing.sm,
-  },
-
-  infoCard: {
-    width: "100%",
-    padding: spacing.xl,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginTop: spacing.xxxl,
-  },
-
-  infoRow: {
+  connectedRow: {
     flexDirection: "row",
+
     alignItems: "center",
-    justifyContent: "space-between",
+
+    marginTop: 4,
   },
 
-  infoLabel: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
+  connectedDot: {
+    width: 8,
+    height: 8,
 
-  infoValue: {
-    ...typography.body,
-    fontWeight: "600",
-    color: colors.textPrimary,
+    marginRight: 6,
+
+    borderRadius: 4,
+
+    backgroundColor: "#22C55E",
   },
 
   connectedText: {
-    ...typography.body,
-    fontWeight: "700",
-    color: colors.primary,
-  },
-
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.lg,
-  },
-
-  talkButton: {
-    minHeight: 62,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: spacing.sm,
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-    marginTop: spacing.xxxl,
-  },
-
-  talkButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    backgroundColor: colors.primaryPressed,
-  },
-
-  talkButtonText: {
-    ...typography.button,
-    color: colors.white,
-  },
-
-  helperText: {
     ...typography.caption,
-    textAlign: "center",
-    color: colors.textMuted,
-    marginTop: spacing.md,
+
+    fontWeight: "600",
+
+    color: "#15803D",
   },
 
-  deviceSection: {
-    width: "100%",
-    padding: spacing.xl,
-    borderRadius: radius.md,
+  talkCard: {
+    alignItems: "center",
+
+    marginTop: 16,
+
+    paddingTop: 20,
+    paddingBottom: 20,
+
+    paddingHorizontal: 12,
+
+    borderRadius: radius.lg,
+
     backgroundColor: colors.surface,
-    marginTop: spacing.xxxl,
   },
 
-  deviceTitle: {
-    ...typography.body,
-    fontWeight: "700",
+  talkHeadline: {
+    ...typography.title,
+
+    fontSize: 24,
+
+    textAlign: "center",
+
     color: colors.textPrimary,
   },
 
-  deviceDescription: {
+  talkSubheadline: {
     ...typography.caption,
+
+    marginTop: 4,
+
     color: colors.textSecondary,
-    marginTop: spacing.sm,
+  },
+
+  talkButtonWrap: {
+    marginTop: 16,
+  },
+
+  successPill: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginTop: 12,
+
+    paddingHorizontal: 12,
+
+    paddingVertical: 6,
+
+    borderRadius: radius.round,
+
+    backgroundColor: "#ECFDF3",
+  },
+
+  successText: {
+    ...typography.caption,
+
+    marginLeft: 5,
+
+    fontWeight: "700",
+
+    color: "#15803D",
+  },
+
+  settingsCard: {
+    marginTop: 16,
+
+    padding: 15,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.surface,
+  },
+
+  settingsTitleRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+  },
+
+  settingsTitle: {
+    ...typography.body,
+
+    marginLeft: 7,
+
+    fontWeight: "700",
+
+    color: colors.textPrimary,
+  },
+
+  settingsDescription: {
+    ...typography.caption,
+
+    marginTop: 7,
+
+    lineHeight: 19,
+
+    color: colors.textSecondary,
+  },
+
+  codeCard: {
+    alignItems: "center",
+
+    marginTop: 14,
+
+    padding: 15,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.background,
+  },
+
+  codeLabel: {
+    ...typography.caption,
+
+    fontWeight: "700",
+
+    letterSpacing: 1,
+
+    color: colors.primary,
+  },
+
+  code: {
+    marginTop: 6,
+
+    fontSize: 32,
+
+    fontWeight: "800",
+
+    letterSpacing: 6,
+
+    color: colors.textPrimary,
+  },
+
+  codeHelp: {
+    ...typography.caption,
+
+    marginTop: 7,
+
+    textAlign: "center",
+
+    color: colors.textMuted,
+  },
+
+  pairCodeLoader: {
+    marginTop: 18,
+    marginBottom: 6,
   },
 
   reconnectButton: {
-    minHeight: 54,
+    minHeight: 46,
+
     flexDirection: "row",
+
     alignItems: "center",
+
     justifyContent: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.primary,
+
+    marginTop: 13,
+
     borderRadius: radius.md,
+
     backgroundColor: colors.background,
-    marginTop: spacing.xl,
   },
 
-  reconnectButtonDisabled: {
-    opacity: 0.45,
-  },
-
-  reconnectButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.8,
-  },
-
-  reconnectButtonText: {
+  reconnectText: {
     ...typography.button,
+
+    marginLeft: 7,
+
     color: colors.primary,
   },
 
-  reconnectCodeCard: {
+  readyCard: {
+    flexDirection: "row",
+
     alignItems: "center",
-    padding: spacing.xl,
+
+    marginTop: 13,
+
+    padding: 12,
+
     borderRadius: radius.md,
-    backgroundColor: colors.background,
-    marginTop: spacing.xl,
+
+    backgroundColor: "#ECFDF3",
   },
 
-  reconnectCodeLabel: {
-    ...typography.caption,
-    fontWeight: "700",
-    letterSpacing: 1.2,
-    color: colors.primary,
+  readyTextWrap: {
+    flex: 1,
+
+    marginLeft: 9,
   },
 
-  reconnectCode: {
-    fontSize: 38,
-    fontWeight: "800",
-    letterSpacing: 7,
-    color: colors.textPrimary,
-    marginTop: spacing.md,
-  },
-
-  reconnectCodeHelp: {
-    ...typography.caption,
-    textAlign: "center",
-    color: colors.textSecondary,
-    marginTop: spacing.md,
-  },
-
-  reconnectError: {
-    ...typography.caption,
-    textAlign: "center",
-    color: colors.danger,
-    marginTop: spacing.md,
-  },
-
-  dangerSection: {
-    width: "100%",
-    padding: spacing.xl,
-    borderWidth: 1,
-    borderColor: colors.danger,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginTop: spacing.xxl,
-  },
-
-  dangerTitle: {
+  readyTitle: {
     ...typography.body,
+
     fontWeight: "700",
-    color: colors.danger,
+
+    color: "#15803D",
   },
 
-  dangerDescription: {
+  readyDescription: {
     ...typography.caption,
+
+    marginTop: 2,
+
+    color: "#15803D",
+  },
+
+  cancelReconnectButton: {
+    minHeight: 43,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginTop: 11,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.background,
+  },
+
+  cancelReconnectText: {
+    ...typography.button,
+
     color: colors.textSecondary,
-    marginTop: spacing.sm,
   },
 
   removeButton: {
-    minHeight: 54,
+    minHeight: 45,
+
     flexDirection: "row",
+
     alignItems: "center",
+
     justifyContent: "center",
-    gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.danger,
+
+    marginTop: 14,
+
     borderRadius: radius.md,
-    backgroundColor: colors.background,
-    marginTop: spacing.xl,
+
+    borderWidth: 1,
+
+    borderColor: colors.danger,
   },
 
-  removeButtonDisabled: {
+  removeText: {
+    ...typography.button,
+
+    marginLeft: 7,
+
+    color: colors.danger,
+  },
+
+  inlineError: {
+    ...typography.caption,
+
+    marginTop: 8,
+
+    textAlign: "center",
+
+    color: colors.danger,
+  },
+
+  buttonDisabled: {
     opacity: 0.45,
   },
 
-  removeButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.8,
-  },
+  buttonPressed: {
+    opacity: 0.72,
 
-  removeButtonText: {
-    ...typography.button,
-    color: colors.danger,
-  },
-
-  removeError: {
-    ...typography.caption,
-    color: colors.danger,
-    textAlign: "center",
-    marginTop: spacing.md,
+    transform: [
+      {
+        scale: 0.98,
+      },
+    ],
   },
 
   loadingText: {
     ...typography.body,
-    color: colors.textSecondary,
+
     marginTop: spacing.md,
+
+    color: colors.textSecondary,
   },
 
   errorTitle: {
     ...typography.title,
-    fontSize: 24,
+
+    marginTop: 12,
+
+    fontSize: 23,
+
     textAlign: "center",
+
     color: colors.textPrimary,
-    marginTop: spacing.lg,
   },
 
   errorText: {
     ...typography.body,
+
+    marginTop: 7,
+
     textAlign: "center",
+
     color: colors.textSecondary,
-    marginTop: spacing.md,
   },
 
-  backButton: {
-    minHeight: 52,
-    minWidth: 140,
+  backAction: {
+    minHeight: 46,
+
+    minWidth: 130,
+
     alignItems: "center",
+
     justifyContent: "center",
+
+    marginTop: 18,
+
     borderRadius: radius.md,
+
     backgroundColor: colors.primary,
-    marginTop: spacing.xxl,
   },
 
-  backButtonText: {
+  backActionText: {
     ...typography.button,
-    color: colors.white,
-  },
 
-  buttonPressed: {
-    opacity: 0.8,
+    color: colors.white,
   },
 });

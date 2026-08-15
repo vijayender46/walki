@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import {
   ActivityIndicator,
   Pressable,
@@ -9,53 +10,83 @@ import {
 } from "react-native";
 
 import { getAuth, signOut } from "@react-native-firebase/auth";
+
+import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 
 import { TalkButton } from "@/components/TalkButton";
-import { downloadWalkiAudio } from "@/features/audio/audioDownloadService";
+
 import { uploadWalkiAudio } from "@/features/audio/audioUploadService";
+
+import { useWalkiFamilyChannel } from "@/features/audio/useWalkiFamilyChannel";
+
 import { useWalkiRecorder } from "@/features/audio/useWalkiRecorder";
+
+import {
+  publishFamilyMessage,
+  publishKidMessage,
+} from "@/features/audio/walkiChannelService";
+
 import { useAuth } from "@/features/auth/AuthContext";
+
 import type { UserProfile } from "@/features/auth/types";
+
 import { getFamilyKids } from "@/features/family/familyMembersService";
+
 import { createKidInvite } from "@/features/family/familyService";
+
 import { colors, radius, spacing, typography } from "@/theme";
 
-const TEST_AUDIO_KEY =
-  "families/BVBgrjLSYk6dDu5hPXa9/6JbsV5kPzpXr8AVx3QCKZfbwhAp2/51d07364-75fe-4306-84f1-22d5cdc1aa1f.m4a";
+type ProfileWithKidId = UserProfile & {
+  kidId?: string | null;
+};
 
 export default function HomeScreen() {
   const { profile } = useAuth();
 
   const [kids, setKids] = useState<UserProfile[]>([]);
+
   const [isLoadingKids, setIsLoadingKids] = useState(false);
+
   const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+
   const [familyError, setFamilyError] = useState<string | null>(null);
 
-  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
-  const [uploadedAudioKey, setUploadedAudioKey] = useState<string | null>(null);
+  const [isSendingWalki, setIsSendingWalki] = useState(false);
 
-  const [isDownloadingTestAudio, setIsDownloadingTestAudio] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+
+  const [walkiSent, setWalkiSent] = useState(false);
 
   const {
     isRecording,
-    audioUri,
     isPlaying,
+
     error: recordingError,
+
     startRecording,
     stopRecording,
-    playRecording,
+
     playRecordingFromUri,
+
     stopPlayback,
     clearRecording,
   } = useWalkiRecorder();
 
+  const profileWithKidId = profile as ProfileWithKidId | null;
+
+  /*
+   * ========================================
+   * LOAD FAMILY KIDS
+   * ========================================
+   */
+
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
     const loadKids = async () => {
       if (profile?.role !== "parent" || !profile.familyId) {
-        if (isMounted) {
+        if (mounted) {
           setKids([]);
         }
 
@@ -64,21 +95,22 @@ export default function HomeScreen() {
 
       try {
         setIsLoadingKids(true);
+
         setFamilyError(null);
 
-        const familyKids = await getFamilyKids(profile.familyId);
+        const result = await getFamilyKids(profile.familyId);
 
-        if (isMounted) {
-          setKids(familyKids);
+        if (mounted) {
+          setKids(result);
         }
       } catch (error) {
         console.error("Load family kids error:", error);
 
-        if (isMounted) {
+        if (mounted) {
           setFamilyError("We couldn't load your kids.");
         }
       } finally {
-        if (isMounted) {
+        if (mounted) {
           setIsLoadingKids(false);
         }
       }
@@ -87,9 +119,37 @@ export default function HomeScreen() {
     void loadKids();
 
     return () => {
-      isMounted = false;
+      mounted = false;
     };
   }, [profile?.familyId, profile?.role]);
+
+  /*
+   * ========================================
+   * DIRECT LISTENER ROUTING
+   * ========================================
+   */
+
+  const directKidIds =
+    profile?.role === "parent"
+      ? kids.map((kid) => kid.uid)
+      : profile?.role === "kid" && profileWithKidId?.kidId
+        ? [profileWithKidId.kidId]
+        : [];
+
+  const { lastReceivedAudioUri, isReceiving, incomingError, playLastMessage } =
+    useWalkiFamilyChannel({
+      familyId: profile?.familyId,
+
+      directKidIds,
+
+      playAudio: playRecordingFromUri,
+    });
+
+  /*
+   * ========================================
+   * FAMILY ACTIONS
+   * ========================================
+   */
 
   const handleCreateFirstFamily = () => {
     router.push("/family/create");
@@ -110,12 +170,14 @@ export default function HomeScreen() {
 
     try {
       setIsCreatingInvite(true);
+
       setFamilyError(null);
 
       const result = await createKidInvite(profile.familyId);
 
       router.push({
         pathname: "/family/invite",
+
         params: {
           code: result.inviteCode,
         },
@@ -123,99 +185,140 @@ export default function HomeScreen() {
     } catch (error) {
       console.error("Create kid invite error:", error);
 
-      setFamilyError("We couldn't create a kid invite. Please try again.");
+      setFamilyError("We couldn't create a kid invite.");
     } finally {
       setIsCreatingInvite(false);
     }
   };
 
-  const handleOpenExistingInvite = () => {
-    router.push("/family/invite");
-  };
-
   const handleKidPress = (kid: UserProfile) => {
     router.push({
       pathname: "/kid/[uid]",
+
       params: {
         uid: kid.uid,
       },
     });
   };
 
-  const handleTalkStart = () => {
-    setUploadedAudioKey(null);
-    void startRecording();
-  };
+  /*
+   * ========================================
+   * TALK
+   * ========================================
+   */
 
-  const handleTalkEnd = async () => {
-    const uri = await stopRecording();
-
-    if (uri) {
-      console.log("Recorded Walki message:", uri);
-    }
-  };
-
-  const handlePlayback = async () => {
-    if (isPlaying) {
-      stopPlayback();
-      return;
-    }
-
-    await playRecording();
-  };
-
-  const handleDiscardRecording = () => {
-    clearRecording();
-    setUploadedAudioKey(null);
-  };
-
-  const handleUploadRecording = async () => {
-    if (!audioUri || !profile?.familyId || isUploadingAudio) {
+  const handleTalkStart = async () => {
+    if (isSendingWalki || isReceiving) {
       return;
     }
 
     try {
-      setIsUploadingAudio(true);
-      setUploadedAudioKey(null);
-
-      const result = await uploadWalkiAudio({
-        audioUri,
-        familyId: profile.familyId,
-      });
-
-      setUploadedAudioKey(result.key);
-
-      console.log("Walki audio uploaded successfully:", result.key);
-    } catch (error) {
-      console.error("Walki audio upload error:", error);
-    } finally {
-      setIsUploadingAudio(false);
-    }
-  };
-
-  const handleTestSecurePlayback = async () => {
-    if (isDownloadingTestAudio) {
-      return;
-    }
-
-    try {
-      setIsDownloadingTestAudio(true);
+      setSendError(null);
+      setWalkiSent(false);
 
       if (isPlaying) {
         stopPlayback();
       }
 
-      const localUri = await downloadWalkiAudio({
-        objectKey: TEST_AUDIO_KEY,
+      await startRecording();
+    } catch (error) {
+      console.error("Walki recording start error:", error);
+
+      setSendError("We couldn't start recording.");
+    }
+  };
+
+  const handleTalkEnd = async () => {
+    if (isSendingWalki) {
+      return;
+    }
+
+    try {
+      const audioUri = await stopRecording();
+
+      if (!audioUri) {
+        return;
+      }
+
+      if (!profile?.familyId) {
+        throw new Error("FAMILY_ID_MISSING");
+      }
+
+      setIsSendingWalki(true);
+
+      setSendError(null);
+
+      const result = await uploadWalkiAudio({
+        audioUri,
+
+        familyId: profile.familyId,
       });
 
-      console.log("Downloaded Walki audio:", localUri);
+      /*
+       * KID → PARENT
+       */
+      if (profile.role === "kid") {
+        const kidId = profileWithKidId?.kidId;
 
-      await playRecordingFromUri(localUri);
+        if (!kidId) {
+          throw new Error("KID_ID_MISSING");
+        }
+
+        await publishKidMessage({
+          familyId: profile.familyId,
+
+          kidId,
+
+          audioKey: result.key,
+
+          senderKidId: kidId,
+        });
+
+        console.log("Kid direct Walki transmission published:", {
+          kidId,
+          audioKey: result.key,
+        });
+      } else {
+        /*
+         * PARENT HOME → FAMILY
+         */
+        await publishFamilyMessage({
+          familyId: profile.familyId,
+
+          audioKey: result.key,
+
+          senderKidId: null,
+        });
+
+        console.log("Parent family Walki transmission published:", result.key);
+      }
+
+      clearRecording();
+
+      setWalkiSent(true);
     } catch (error) {
-      console.error("Secure playback test error:", error);
+      console.error("Walki release-to-send error:", error);
+
+      setSendError("We couldn't send this Walki message.");
     } finally {
-      setIsDownloadingTestAudio(false);
+      setIsSendingWalki(false);
+    }
+  };
+
+  const handlePlayLastMessage = async () => {
+    if (!lastReceivedAudioUri || isRecording || isReceiving || isSendingWalki) {
+      return;
+    }
+
+    try {
+      if (isPlaying) {
+        stopPlayback();
+        return;
+      }
+
+      await playLastMessage();
+    } catch (error) {
+      console.error("Play last Walki error:", error);
     }
   };
 
@@ -232,97 +335,129 @@ export default function HomeScreen() {
   };
 
   const getInitial = (name: string) => {
-    const cleanedName = name.trim();
+    const clean = name.trim();
 
-    if (!cleanedName) {
-      return "K";
-    }
-
-    return cleanedName.charAt(0).toUpperCase();
+    return clean ? clean.charAt(0).toUpperCase() : "K";
   };
 
   if (!profile) {
     return (
-      <View style={styles.container}>
+      <View style={styles.loadingScreen}>
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
+  const isKid = profile.role === "kid";
+
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, isKid && styles.kidContainer]}
       showsVerticalScrollIndicator={false}
     >
-      <Text style={styles.title}>Hi {profile.displayName || "Walki"}</Text>
+      {/*
+       * ======================================
+       * HEADER
+       * ======================================
+       */}
 
-      <Text style={styles.subtitle}>Your Walki profile is ready.</Text>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.greeting}>
+            Hi {profile.displayName || "Walki"}
+            {isKid ? " 👋" : ""}
+          </Text>
 
-      <Text style={styles.role}>
-        {profile.role === "parent" ? "Parent account" : "Kid account"}
-      </Text>
+          <Text style={styles.accountType}>
+            {isKid ? "KID WALKI" : "PARENT WALKI"}
+          </Text>
+        </View>
 
-      {profile.role === "parent" && !profile.familyId ? (
-        <View style={styles.noFamilySection}>
-          <Text style={styles.sectionEyebrow}>WALKI FAMILY</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Log out"
+          onPress={handleLogout}
+          hitSlop={10}
+          style={styles.headerIconButton}
+        >
+          <Ionicons
+            name="log-out-outline"
+            size={22}
+            color={colors.textSecondary}
+          />
+        </Pressable>
+      </View>
 
-          <Text style={styles.noFamilyTitle}>Connect your family</Text>
+      {/*
+       * ======================================
+       * PARENT WITHOUT FAMILY
+       * ======================================
+       */}
 
-          <Text style={styles.noFamilyText}>
-            Start a new Walki family or join one created by another parent.
+      {!isKid && !profile.familyId ? (
+        <View style={styles.emptyFamilyCard}>
+          <Ionicons name="people-outline" size={34} color={colors.primary} />
+
+          <Text style={styles.emptyFamilyTitle}>Connect your family</Text>
+
+          <Text style={styles.emptyFamilyText}>
+            Create a Walki family or join an existing one.
           </Text>
 
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Create a Walki family"
             onPress={handleCreateFirstFamily}
-            style={({ pressed }) => [
-              styles.familyButton,
-              pressed && styles.familyButtonPressed,
-            ]}
+            style={styles.primaryAction}
           >
-            <Text style={styles.familyButtonText}>Create family</Text>
+            <Text style={styles.primaryActionText}>Create family</Text>
           </Pressable>
 
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Join existing Walki family"
             onPress={handleJoinExistingFamily}
-            style={({ pressed }) => [
-              styles.joinFamilyButton,
-              pressed && styles.joinFamilyButtonPressed,
-            ]}
+            style={styles.secondaryAction}
           >
-            <Text style={styles.joinFamilyButtonText}>
-              Join existing family
-            </Text>
+            <Text style={styles.secondaryActionText}>Join family</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {profile.role === "parent" && profile.familyId ? (
-        <View style={styles.familySection}>
-          <View style={styles.familyHeader}>
-            <View>
-              <Text style={styles.sectionEyebrow}>YOUR FAMILY</Text>
+      {/*
+       * ======================================
+       * PARENT FAMILY ROW
+       * ======================================
+       */}
 
-              <Text style={styles.sectionTitle}>Your kids</Text>
+      {!isKid && profile.familyId ? (
+        <View style={styles.familyCompactSection}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.eyebrow}>YOUR FAMILY</Text>
+
+              <Text style={styles.sectionTitle}>Kids</Text>
             </View>
 
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="View current kid invite"
-              onPress={handleOpenExistingInvite}
-              hitSlop={10}
+              accessibilityLabel="Add kid"
+              disabled={isCreatingInvite}
+              onPress={handleAddAnotherKid}
+              style={styles.addKidTopButton}
             >
-              <Text style={styles.inviteLink}>Invite</Text>
+              {isCreatingInvite ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <>
+                  <Ionicons name="add" size={18} color={colors.primary} />
+
+                  <Text style={styles.addKidTopText}>Kid</Text>
+                </>
+              )}
             </Pressable>
           </View>
 
           {isLoadingKids ? (
             <ActivityIndicator
               color={colors.primary}
-              style={styles.kidsLoader}
+              style={styles.kidLoader}
             />
           ) : (
             <ScrollView
@@ -331,28 +466,22 @@ export default function HomeScreen() {
               contentContainerStyle={styles.kidsRow}
             >
               {kids.map((kid) => {
-                const isPink = kid.theme === "pink";
+                const pink = kid.theme === "pink";
 
                 return (
                   <Pressable
                     key={kid.uid}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${
-                      kid.displayName || "kid"
-                    } profile`}
                     onPress={() => handleKidPress(kid)}
-                    style={({ pressed }) => [
-                      styles.kidItem,
-                      pressed && styles.kidItemPressed,
-                    ]}
+                    style={styles.kidTile}
                   >
                     <View
                       style={[
-                        styles.avatar,
-                        isPink ? styles.avatarPink : styles.avatarBlue,
+                        styles.kidAvatar,
+
+                        pink ? styles.pinkAvatar : styles.blueAvatar,
                       ]}
                     >
-                      <Text style={styles.avatarText}>
+                      <Text style={styles.kidInitial}>
                         {getInitial(kid.displayName)}
                       </Text>
                     </View>
@@ -364,53 +493,30 @@ export default function HomeScreen() {
                 );
               })}
 
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add another kid"
-                disabled={isCreatingInvite}
-                onPress={handleAddAnotherKid}
-                style={({ pressed }) => [
-                  styles.kidItem,
-                  pressed && !isCreatingInvite && styles.kidItemPressed,
-                ]}
-              >
-                <View style={styles.addAvatar}>
-                  {isCreatingInvite ? (
-                    <ActivityIndicator color={colors.primary} />
-                  ) : (
-                    <Text style={styles.addSymbol}>+</Text>
-                  )}
+              <Pressable onPress={handleAddAnotherKid} style={styles.kidTile}>
+                <View style={styles.addKidAvatar}>
+                  <Ionicons name="add" size={28} color={colors.primary} />
                 </View>
 
-                <Text style={styles.kidName}>Add kid</Text>
+                <Text style={styles.kidName}>Add</Text>
               </Pressable>
             </ScrollView>
           )}
 
-          {kids.length === 0 && !isLoadingKids ? (
-            <Text style={styles.emptyText}>
-              Add your first kid to start your Walki family.
-            </Text>
-          ) : null}
+          <Pressable onPress={handleAddParent} style={styles.addParentCompact}>
+            <Ionicons
+              name="person-add-outline"
+              size={18}
+              color={colors.primary}
+            />
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Add another parent"
-            onPress={handleAddParent}
-            style={({ pressed }) => [
-              styles.addParentButton,
-              pressed && styles.addParentButtonPressed,
-            ]}
-          >
-            <Text style={styles.addParentSymbol}>+</Text>
+            <Text style={styles.addParentText}>Add another parent</Text>
 
-            <View style={styles.addParentTextContainer}>
-              <Text style={styles.addParentTitle}>Add parent</Text>
-
-              <Text style={styles.addParentSubtitle}>
-                Invite another parent to this family
-              </Text>
-            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={colors.textMuted}
+            />
           </Pressable>
 
           {familyError ? (
@@ -419,601 +525,570 @@ export default function HomeScreen() {
         </View>
       ) : null}
 
-      {profile.role === "kid" ? (
-        <View style={styles.kidHomeCard}>
-          <Text style={styles.kidHomeTitle}>Family connected</Text>
+      {/*
+       * ======================================
+       * KID STATUS
+       * ======================================
+       */}
 
-          <Text style={styles.kidHomeText}>Your kid home is ready.</Text>
+      {isKid ? (
+        <View style={styles.kidConnectedPill}>
+          <Ionicons name="people" size={17} color="#16A34A" />
+
+          <Text style={styles.kidConnectedText}>Family connected</Text>
         </View>
       ) : null}
 
-      <View style={styles.talkSection}>
-        <Text style={styles.sectionEyebrow}>WALKI TALK</Text>
+      {/*
+       * ======================================
+       * TALK AREA
+       * ======================================
+       */}
 
-        <Text style={styles.talkTitle}>
-          {isRecording ? "I'm listening..." : "Ready to talk"}
-        </Text>
-
-        <TalkButton onPressIn={handleTalkStart} onPressOut={handleTalkEnd} />
-
-        <Text
-          style={[
-            styles.recordingStatus,
-            isRecording && styles.recordingStatusActive,
-          ]}
-        >
+      <View style={[styles.talkArea, isKid && styles.kidTalkArea]}>
+        <Text style={[styles.readyTitle, isKid && styles.kidReadyTitle]}>
           {isRecording
-            ? "Keep holding while you talk"
-            : audioUri
-              ? "Voice message recorded"
-              : "Hold the button to talk"}
+            ? "Talking..."
+            : isSendingWalki
+              ? "Sending..."
+              : isReceiving
+                ? "Listen up!"
+                : isPlaying
+                  ? "Playing Walki"
+                  : isKid
+                    ? "Ready!"
+                    : "Ready to talk"}
         </Text>
 
-        {audioUri && !isRecording ? (
-          <View style={styles.playbackActions}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                isPlaying ? "Stop recording playback" : "Play recording"
-              }
-              onPress={handlePlayback}
-              style={({ pressed }) => [
-                styles.playButton,
-                pressed && styles.playButtonPressed,
-              ]}
-            >
-              <Text style={styles.playButtonText}>
-                {isPlaying ? "Stop playback" : "Play recording"}
-              </Text>
-            </Pressable>
+        <Text style={styles.readySubtitle}>
+          {isRecording
+            ? "Release when you're done"
+            : isReceiving
+              ? "Incoming family message"
+              : isKid
+                ? "Hold the mic and talk"
+                : "Hold the mic to broadcast"}
+        </Text>
 
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Upload recording"
-              disabled={isUploadingAudio || isPlaying}
-              onPress={handleUploadRecording}
-              style={({ pressed }) => [
-                styles.uploadButton,
-                (isUploadingAudio || isPlaying) && styles.uploadButtonDisabled,
-                pressed &&
-                  !isUploadingAudio &&
-                  !isPlaying &&
-                  styles.uploadButtonPressed,
-              ]}
-            >
-              {isUploadingAudio ? (
-                <ActivityIndicator color={colors.white} />
-              ) : (
-                <Text style={styles.uploadButtonText}>Upload recording</Text>
-              )}
-            </Pressable>
+        <View style={styles.talkButtonSpace}>
+          <TalkButton
+            kidMode={isKid}
+            isRecording={isRecording}
+            isSending={isSendingWalki}
+            isReceiving={isReceiving}
+            disabled={isSendingWalki || isReceiving}
+            onPressIn={() => {
+              void handleTalkStart();
+            }}
+            onPressOut={() => {
+              void handleTalkEnd();
+            }}
+          />
+        </View>
 
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Discard recording"
-              disabled={isPlaying}
-              onPress={handleDiscardRecording}
-              style={({ pressed }) => [
-                styles.discardButton,
-                isPlaying && styles.discardButtonDisabled,
-                pressed && !isPlaying && styles.discardButtonPressed,
-              ]}
-            >
-              <Text style={styles.discardButtonText}>Discard</Text>
-            </Pressable>
+        {walkiSent && !isSendingWalki && !isRecording ? (
+          <View style={styles.sentPill}>
+            <Ionicons name="checkmark-circle" size={17} color="#16A34A" />
+
+            <Text style={styles.sentText}>Walki sent</Text>
           </View>
         ) : null}
 
-        {uploadedAudioKey ? (
-          <Text style={styles.uploadSuccess}>Voice uploaded ✓</Text>
-        ) : null}
-
-        {audioUri ? (
-          <Text numberOfLines={1} style={styles.audioUri}>
-            Local recording ready
-          </Text>
-        ) : null}
-
-        {recordingError ? (
-          <Text style={styles.recordingError}>{recordingError}</Text>
-        ) : null}
-
-        <View style={styles.secureTestSection}>
-          <Text style={styles.secureTestLabel}>PHASE 5B TEST</Text>
-
+        {lastReceivedAudioUri ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Test secure audio playback"
-            disabled={isDownloadingTestAudio}
-            onPress={handleTestSecurePlayback}
+            accessibilityLabel="Play last message"
+            disabled={isRecording || isReceiving || isSendingWalki}
+            onPress={() => {
+              void handlePlayLastMessage();
+            }}
             style={({ pressed }) => [
-              styles.secureTestButton,
-              isDownloadingTestAudio && styles.secureTestButtonDisabled,
-              pressed &&
-                !isDownloadingTestAudio &&
-                styles.secureTestButtonPressed,
+              styles.lastMessageButton,
+
+              pressed && styles.lastMessagePressed,
+
+              (isRecording || isReceiving || isSendingWalki) && styles.disabled,
             ]}
           >
-            {isDownloadingTestAudio ? (
-              <ActivityIndicator color={colors.white} />
-            ) : (
-              <Text style={styles.secureTestButtonText}>
-                Test secure playback
-              </Text>
-            )}
-          </Pressable>
-        </View>
-      </View>
+            <Ionicons
+              name={isPlaying ? "stop-circle-outline" : "play-circle-outline"}
+              size={23}
+              color={colors.primary}
+            />
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Log out"
-        onPress={handleLogout}
-        style={({ pressed }) => [
-          styles.logoutButton,
-          pressed && styles.logoutButtonPressed,
-        ]}
-      >
-        <Text style={styles.logoutText}>Log out</Text>
-      </Pressable>
+            <Text style={styles.lastMessageText}>
+              {isPlaying ? "Stop message" : "Play last message"}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {sendError || recordingError || incomingError ? (
+          <Text style={styles.errorText}>
+            {sendError || recordingError || incomingError}
+          </Text>
+        ) : null}
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.background,
+  },
+
   container: {
     flexGrow: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.xxxl,
+
+    paddingHorizontal: spacing.lg,
+
+    paddingTop: 18,
+    paddingBottom: 24,
+
     backgroundColor: colors.background,
   },
 
-  title: {
-    ...typography.title,
-    fontSize: 32,
-    textAlign: "center",
-    color: colors.textPrimary,
-  },
-
-  subtitle: {
-    ...typography.body,
-    textAlign: "center",
-    color: colors.textSecondary,
-    marginTop: spacing.md,
-  },
-
-  role: {
-    ...typography.caption,
-    color: colors.primary,
-    marginTop: spacing.sm,
-  },
-
-  noFamilySection: {
-    width: "100%",
-    alignItems: "center",
-    marginTop: spacing.xxxl,
-    padding: spacing.xl,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-  },
-
-  noFamilyTitle: {
-    ...typography.title,
-    fontSize: 24,
-    textAlign: "center",
-    color: colors.textPrimary,
-    marginTop: spacing.sm,
-  },
-
-  noFamilyText: {
-    ...typography.body,
-    textAlign: "center",
-    color: colors.textSecondary,
-    marginTop: spacing.md,
-  },
-
-  familyButton: {
-    minHeight: 54,
-    width: "100%",
-    paddingHorizontal: spacing.xl,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-    marginTop: spacing.xxl,
-  },
-
-  familyButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    backgroundColor: colors.primaryPressed,
-  },
-
-  familyButtonText: {
-    ...typography.button,
-    color: colors.white,
-  },
-
-  joinFamilyButton: {
-    minHeight: 52,
-    width: "100%",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: radius.md,
-    backgroundColor: colors.background,
-    marginTop: spacing.md,
-  },
-
-  joinFamilyButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.8,
-  },
-
-  joinFamilyButtonText: {
-    ...typography.button,
-    color: colors.primary,
-  },
-
-  familySection: {
-    width: "100%",
-    marginTop: spacing.xxxl,
-  },
-
-  familyHeader: {
-    flexDirection: "row",
-    alignItems: "center",
+  kidContainer: {
     justifyContent: "space-between",
   },
 
-  sectionEyebrow: {
+  header: {
+    width: "100%",
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    justifyContent: "space-between",
+  },
+
+  greeting: {
+    ...typography.title,
+
+    fontSize: 27,
+
+    color: colors.textPrimary,
+  },
+
+  accountType: {
     ...typography.caption,
+
+    marginTop: 2,
+
     fontWeight: "700",
-    letterSpacing: 1.2,
+
+    letterSpacing: 1,
+
+    color: colors.textMuted,
+  },
+
+  headerIconButton: {
+    width: 42,
+    height: 42,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    borderRadius: radius.round,
+
+    backgroundColor: colors.surface,
+  },
+
+  familyCompactSection: {
+    width: "100%",
+
+    marginTop: spacing.lg,
+  },
+
+  sectionHeader: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    justifyContent: "space-between",
+  },
+
+  eyebrow: {
+    ...typography.caption,
+
+    fontWeight: "700",
+
+    letterSpacing: 1.1,
+
     color: colors.primary,
   },
 
   sectionTitle: {
     ...typography.title,
-    fontSize: 24,
+
+    marginTop: 1,
+
+    fontSize: 20,
+
     color: colors.textPrimary,
-    marginTop: spacing.xs,
   },
 
-  inviteLink: {
-    ...typography.body,
-    fontWeight: "700",
-    color: colors.primary,
-  },
+  addKidTopButton: {
+    minHeight: 36,
 
-  kidsLoader: {
-    marginTop: spacing.xxl,
-  },
+    flexDirection: "row",
 
-  kidsRow: {
-    gap: spacing.lg,
-    paddingVertical: spacing.xl,
-  },
-
-  kidItem: {
-    width: 82,
     alignItems: "center",
-  },
 
-  kidItemPressed: {
-    transform: [{ scale: 0.96 }],
-    opacity: 0.8,
-  },
-
-  avatar: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    alignItems: "center",
     justifyContent: "center",
-  },
 
-  avatarBlue: {
-    backgroundColor: "#3B82F6",
-  },
+    paddingHorizontal: 11,
 
-  avatarPink: {
-    backgroundColor: "#FF5CA8",
-  },
+    borderRadius: radius.round,
 
-  avatarText: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: colors.white,
-  },
-
-  addAvatar: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: colors.primary,
-    borderStyle: "dashed",
     backgroundColor: colors.surface,
   },
 
-  addSymbol: {
-    fontSize: 36,
-    fontWeight: "400",
-    lineHeight: 40,
+  addKidTopText: {
+    ...typography.caption,
+
+    marginLeft: 2,
+
+    fontWeight: "700",
+
     color: colors.primary,
+  },
+
+  kidsRow: {
+    gap: 13,
+
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
+
+  kidLoader: {
+    marginVertical: 22,
+  },
+
+  kidTile: {
+    width: 66,
+
+    alignItems: "center",
+  },
+
+  kidAvatar: {
+    width: 58,
+    height: 58,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    borderRadius: 29,
+  },
+
+  blueAvatar: {
+    backgroundColor: "#3B82F6",
+  },
+
+  pinkAvatar: {
+    backgroundColor: "#FF5CA8",
+  },
+
+  kidInitial: {
+    fontSize: 23,
+
+    fontWeight: "800",
+
+    color: colors.white,
   },
 
   kidName: {
     ...typography.caption,
-    maxWidth: 82,
+
+    width: 66,
+
+    marginTop: 5,
+
     textAlign: "center",
+
     fontWeight: "600",
+
     color: colors.textPrimary,
-    marginTop: spacing.sm,
   },
 
-  emptyText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    marginTop: spacing.sm,
-  },
+  addKidAvatar: {
+    width: 58,
+    height: 58,
 
-  addParentButton: {
-    width: "100%",
-    minHeight: 68,
-    flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginTop: spacing.md,
-  },
 
-  addParentButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.8,
-  },
+    justifyContent: "center",
 
-  addParentSymbol: {
-    width: 38,
-    height: 38,
-    textAlign: "center",
-    lineHeight: 36,
-    fontSize: 28,
-    fontWeight: "500",
-    color: colors.primary,
-    borderWidth: 1,
+    borderWidth: 2,
+
+    borderStyle: "dashed",
+
     borderColor: colors.primary,
-    borderRadius: 19,
+
+    borderRadius: 29,
+
+    backgroundColor: colors.surface,
   },
 
-  addParentTextContainer: {
-    flex: 1,
-    marginLeft: spacing.md,
+  addParentCompact: {
+    minHeight: 46,
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    paddingHorizontal: 13,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.surface,
   },
 
-  addParentTitle: {
+  addParentText: {
     ...typography.body,
-    fontWeight: "700",
+
+    flex: 1,
+
+    marginLeft: 10,
+
+    fontWeight: "600",
+
     color: colors.textPrimary,
   },
 
-  addParentSubtitle: {
-    ...typography.caption,
+  emptyFamilyCard: {
+    width: "100%",
+
+    alignItems: "center",
+
+    padding: spacing.lg,
+
+    marginTop: spacing.xl,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.surface,
+  },
+
+  emptyFamilyTitle: {
+    ...typography.title,
+
+    marginTop: 8,
+
+    fontSize: 22,
+
+    color: colors.textPrimary,
+  },
+
+  emptyFamilyText: {
+    ...typography.body,
+
+    marginTop: 5,
+
+    textAlign: "center",
+
     color: colors.textSecondary,
-    marginTop: 2,
+  },
+
+  primaryAction: {
+    width: "100%",
+
+    minHeight: 46,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginTop: 15,
+
+    borderRadius: radius.md,
+
+    backgroundColor: colors.primary,
+  },
+
+  primaryActionText: {
+    ...typography.button,
+
+    color: colors.white,
+  },
+
+  secondaryAction: {
+    width: "100%",
+
+    minHeight: 44,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginTop: 8,
+
+    borderRadius: radius.md,
+
+    borderWidth: 1,
+
+    borderColor: colors.primary,
+  },
+
+  secondaryActionText: {
+    ...typography.button,
+
+    color: colors.primary,
+  },
+
+  kidConnectedPill: {
+    alignSelf: "center",
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginTop: 20,
+
+    paddingHorizontal: 14,
+
+    paddingVertical: 8,
+
+    borderRadius: radius.round,
+
+    backgroundColor: "#ECFDF3",
+  },
+
+  kidConnectedText: {
+    ...typography.caption,
+
+    marginLeft: 6,
+
+    fontWeight: "700",
+
+    color: "#15803D",
+  },
+
+  talkArea: {
+    width: "100%",
+
+    alignItems: "center",
+
+    marginTop: 18,
+
+    paddingTop: 18,
+    paddingBottom: 18,
+
+    paddingHorizontal: 12,
+
+    borderRadius: radius.lg,
+
+    backgroundColor: colors.surface,
+  },
+
+  kidTalkArea: {
+    marginTop: 18,
+
+    paddingTop: 22,
+    paddingBottom: 22,
+
+    backgroundColor: colors.surface,
+  },
+
+  readyTitle: {
+    ...typography.title,
+
+    fontSize: 22,
+
+    color: colors.textPrimary,
+  },
+
+  kidReadyTitle: {
+    fontSize: 28,
+
+    fontWeight: "800",
+  },
+
+  readySubtitle: {
+    ...typography.caption,
+
+    marginTop: 3,
+
+    color: colors.textSecondary,
+  },
+
+  talkButtonSpace: {
+    marginTop: 16,
+  },
+
+  sentPill: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginTop: 10,
+
+    paddingHorizontal: 11,
+
+    paddingVertical: 6,
+
+    borderRadius: radius.round,
+
+    backgroundColor: "#ECFDF3",
+  },
+
+  sentText: {
+    ...typography.caption,
+
+    marginLeft: 5,
+
+    fontWeight: "700",
+
+    color: "#15803D",
+  },
+
+  lastMessageButton: {
+    minHeight: 42,
+
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    marginTop: 12,
+
+    paddingHorizontal: 15,
+
+    borderRadius: radius.round,
+
+    backgroundColor: colors.background,
+  },
+
+  lastMessageText: {
+    ...typography.body,
+
+    marginLeft: 7,
+
+    fontWeight: "700",
+
+    color: colors.primary,
+  },
+
+  lastMessagePressed: {
+    opacity: 0.7,
+  },
+
+  disabled: {
+    opacity: 0.45,
   },
 
   errorText: {
     ...typography.caption,
+
+    marginTop: 8,
+
+    textAlign: "center",
+
     color: colors.danger,
-    marginTop: spacing.md,
-  },
-
-  kidHomeCard: {
-    width: "100%",
-    padding: spacing.xl,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    marginTop: spacing.xxxl,
-  },
-
-  kidHomeTitle: {
-    ...typography.body,
-    fontWeight: "700",
-    textAlign: "center",
-    color: colors.primary,
-  },
-
-  kidHomeText: {
-    ...typography.caption,
-    textAlign: "center",
-    color: colors.textSecondary,
-    marginTop: spacing.sm,
-  },
-
-  talkSection: {
-    width: "100%",
-    alignItems: "center",
-    marginTop: spacing.xxxl,
-    paddingVertical: spacing.xxl,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-  },
-
-  talkTitle: {
-    ...typography.title,
-    fontSize: 24,
-    textAlign: "center",
-    color: colors.textPrimary,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xxl,
-  },
-
-  recordingStatus: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginTop: spacing.lg,
-    textAlign: "center",
-  },
-
-  recordingStatusActive: {
-    color: colors.danger,
-    fontWeight: "700",
-  },
-
-  playbackActions: {
-    width: "100%",
-    marginTop: spacing.xl,
-    gap: spacing.sm,
-  },
-
-  playButton: {
-    minHeight: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-  },
-
-  playButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    backgroundColor: colors.primaryPressed,
-  },
-
-  playButtonText: {
-    ...typography.button,
-    color: colors.white,
-  },
-
-  uploadButton: {
-    minHeight: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.primary,
-  },
-
-  uploadButtonDisabled: {
-    opacity: 0.45,
-  },
-
-  uploadButtonPressed: {
-    transform: [{ scale: 0.98 }],
-  },
-
-  uploadButtonText: {
-    ...typography.button,
-    color: colors.white,
-  },
-
-  uploadSuccess: {
-    ...typography.caption,
-    fontWeight: "700",
-    color: colors.primary,
-    marginTop: spacing.md,
-    textAlign: "center",
-  },
-
-  discardButton: {
-    minHeight: 46,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.background,
-  },
-
-  discardButtonPressed: {
-    opacity: 0.75,
-  },
-
-  discardButtonDisabled: {
-    opacity: 0.4,
-  },
-
-  discardButtonText: {
-    ...typography.button,
-    color: colors.textSecondary,
-  },
-
-  audioUri: {
-    ...typography.caption,
-    color: colors.primary,
-    marginTop: spacing.sm,
-    textAlign: "center",
-  },
-
-  recordingError: {
-    ...typography.caption,
-    color: colors.danger,
-    marginTop: spacing.sm,
-    textAlign: "center",
-  },
-
-  secureTestSection: {
-    width: "100%",
-    marginTop: spacing.xxl,
-    paddingTop: spacing.xl,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-
-  secureTestLabel: {
-    ...typography.caption,
-    fontWeight: "700",
-    letterSpacing: 1.1,
-    textAlign: "center",
-    color: colors.textMuted,
-    marginBottom: spacing.md,
-  },
-
-  secureTestButton: {
-    minHeight: 50,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.textPrimary,
-  },
-
-  secureTestButtonDisabled: {
-    opacity: 0.45,
-  },
-
-  secureTestButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.85,
-  },
-
-  secureTestButtonText: {
-    ...typography.button,
-    color: colors.white,
-  },
-
-  logoutButton: {
-    minHeight: 52,
-    minWidth: 140,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    backgroundColor: colors.textPrimary,
-    marginTop: spacing.xxxl,
-  },
-
-  logoutButtonPressed: {
-    opacity: 0.8,
-  },
-
-  logoutText: {
-    ...typography.button,
-    color: colors.white,
-    fontSize: 16,
   },
 });
