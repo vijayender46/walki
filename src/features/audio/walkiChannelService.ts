@@ -1,22 +1,47 @@
 import { getAuth } from "@react-native-firebase/auth";
 
 import {
-    doc,
-    getFirestore,
-    onSnapshot,
-    serverTimestamp,
-    setDoc,
+  doc,
+  getFirestore,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
 } from "@react-native-firebase/firestore";
 
-export type WalkiChannelType = "family" | "kid";
+/*
+ * ==========================================
+ * WALKI CHANNEL TYPES
+ * ==========================================
+ *
+ * family
+ * → whole-family broadcast
+ *
+ * kid
+ * → stable kid inbox
+ * → kid_{kidId}
+ *
+ * parent
+ * → parent inbox
+ * → parent_{parentUid}
+ */
+
+export type WalkiChannelType = "family" | "kid" | "parent";
 
 export type WalkiChannelMessage = {
   audioKey: string;
+
   senderUid: string;
+
   senderKidId: string | null;
+
   targetKidId: string | null;
+
+  targetParentUid: string | null;
+
   version: string;
+
   channelType: WalkiChannelType;
+
   channelId: string;
 };
 
@@ -24,9 +49,31 @@ function createVersion(uid: string) {
   return `${Date.now()}-${uid}`;
 }
 
-function getKidChannelId(kidId: string) {
+/*
+ * ==========================================
+ * CHANNEL IDENTITIES
+ * ==========================================
+ */
+
+export function getKidChannelId(kidId: string) {
   return `kid_${kidId}`;
 }
+
+export function getParentChannelId(parentUid: string) {
+  return `parent_${parentUid}`;
+}
+
+/*
+ * ==========================================
+ * SNAPSHOT PARSER
+ * ==========================================
+ *
+ * Supports:
+ *
+ * existing family documents
+ * existing kid documents
+ * new parent documents
+ */
 
 function parseChannelSnapshot(
   data: Record<string, unknown>,
@@ -45,7 +92,16 @@ function parseChannelSnapshot(
   const targetKidId =
     typeof data.targetKidId === "string" ? data.targetKidId : null;
 
-  const channelType: WalkiChannelType = data.type === "kid" ? "kid" : "family";
+  const targetParentUid =
+    typeof data.targetParentUid === "string" ? data.targetParentUid : null;
+
+  let channelType: WalkiChannelType = "family";
+
+  if (data.type === "kid") {
+    channelType = "kid";
+  } else if (data.type === "parent") {
+    channelType = "parent";
+  }
 
   if (!audioKey || !senderUid || !version) {
     return null;
@@ -53,11 +109,19 @@ function parseChannelSnapshot(
 
   return {
     audioKey,
+
     senderUid,
+
     senderKidId,
+
     targetKidId,
+
+    targetParentUid,
+
     version,
+
     channelType,
+
     channelId,
   };
 }
@@ -70,7 +134,9 @@ function parseChannelSnapshot(
 
 type PublishFamilyMessageInput = {
   familyId: string;
+
   audioKey: string;
+
   senderKidId?: string | null;
 };
 
@@ -88,6 +154,7 @@ export async function publishFamilyMessage({
   }
 
   const auth = getAuth();
+
   const user = auth.currentUser;
 
   if (!user) {
@@ -102,6 +169,7 @@ export async function publishFamilyMessage({
 
   await setDoc(
     channelRef,
+
     {
       type: "family",
 
@@ -113,12 +181,21 @@ export async function publishFamilyMessage({
 
       targetKidId: null,
 
+      /*
+       * Included explicitly for the new normalized
+       * channel schema.
+       *
+       * Existing consumers remain compatible.
+       */
+      targetParentUid: null,
+
       version: createVersion(user.uid),
 
       sentAt: serverTimestamp(),
 
       updatedAt: serverTimestamp(),
     },
+
     {
       merge: true,
     },
@@ -130,12 +207,6 @@ type ListenToFamilyChannelInput = {
 
   onMessage: (message: WalkiChannelMessage) => void;
 
-  /*
-   * Called when Firestore confirms that this
-   * channel currently has no document.
-   *
-   * Important for first-message handling.
-   */
   onEmpty?: () => void;
 
   onError?: (error: Error) => void;
@@ -163,6 +234,7 @@ export function listenToFamilyChannel({
     (snapshot) => {
       if (!snapshot.exists()) {
         onEmpty?.();
+
         return;
       }
 
@@ -175,6 +247,10 @@ export function listenToFamilyChannel({
       const message = parseChannelSnapshot(data, channelId);
 
       if (!message) {
+        return;
+      }
+
+      if (message.channelType !== "family") {
         return;
       }
 
@@ -197,12 +273,21 @@ export function listenToFamilyChannel({
  * ==========================================
  * DIRECT KID CHANNEL
  * ==========================================
+ *
+ * Existing API preserved.
+ *
+ * This remains the stable kid inbox:
+ *
+ * kid_{stableKidId}
  */
 
 type PublishKidMessageInput = {
   familyId: string;
+
   kidId: string;
+
   audioKey: string;
+
   senderKidId?: string | null;
 };
 
@@ -225,6 +310,7 @@ export async function publishKidMessage({
   }
 
   const auth = getAuth();
+
   const user = auth.currentUser;
 
   if (!user) {
@@ -239,6 +325,7 @@ export async function publishKidMessage({
 
   await setDoc(
     channelRef,
+
     {
       type: "kid",
 
@@ -250,12 +337,18 @@ export async function publishKidMessage({
 
       targetKidId: kidId,
 
+      /*
+       * New normalized field.
+       */
+      targetParentUid: null,
+
       version: createVersion(user.uid),
 
       sentAt: serverTimestamp(),
 
       updatedAt: serverTimestamp(),
     },
+
     {
       merge: true,
     },
@@ -264,6 +357,7 @@ export async function publishKidMessage({
 
 type ListenToKidChannelInput = {
   familyId: string;
+
   kidId: string;
 
   onMessage: (message: WalkiChannelMessage) => void;
@@ -299,14 +393,15 @@ export function listenToKidChannel({
 
     (snapshot) => {
       /*
-       * KEY FIX:
+       * Important:
        *
-       * Tell the receiving hook that the listener
-       * has successfully initialized even though
-       * the document does not exist yet.
+       * Empty channel still counts as initialized
+       * so the first future message is treated as
+       * live rather than historical.
        */
       if (!snapshot.exists()) {
         onEmpty?.();
+
         return;
       }
 
@@ -341,4 +436,186 @@ export function listenToKidChannel({
   );
 }
 
-export { getKidChannelId };
+/*
+ * ==========================================
+ * DIRECT PARENT CHANNEL
+ * ==========================================
+ *
+ * NEW.
+ *
+ * Every parent gets one stable inbox:
+ *
+ * parent_{firebaseUid}
+ *
+ * This enables:
+ *
+ * Kid → specific parent
+ * Parent → specific parent
+ *
+ * without creating a listener for every sender.
+ */
+
+type PublishParentMessageInput = {
+  familyId: string;
+
+  parentUid: string;
+
+  audioKey: string;
+
+  senderKidId?: string | null;
+};
+
+export async function publishParentMessage({
+  familyId,
+  parentUid,
+  audioKey,
+  senderKidId = null,
+}: PublishParentMessageInput): Promise<void> {
+  if (!familyId) {
+    throw new Error("INVALID_FAMILY");
+  }
+
+  if (!parentUid) {
+    throw new Error("INVALID_PARENT");
+  }
+
+  if (!audioKey) {
+    throw new Error("INVALID_AUDIO_KEY");
+  }
+
+  const auth = getAuth();
+
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("NOT_AUTHENTICATED");
+  }
+
+  /*
+   * Self-directed messages are never useful and
+   * should not create unnecessary Firestore/R2
+   * activity.
+   */
+
+  if (user.uid === parentUid) {
+    throw new Error("CANNOT_MESSAGE_SELF");
+  }
+
+  const db = getFirestore();
+
+  const channelId = getParentChannelId(parentUid);
+
+  const channelRef = doc(db, "families", familyId, "channels", channelId);
+
+  await setDoc(
+    channelRef,
+
+    {
+      type: "parent",
+
+      latestAudioKey: audioKey,
+
+      senderUid: user.uid,
+
+      senderKidId,
+
+      targetKidId: null,
+
+      targetParentUid: parentUid,
+
+      version: createVersion(user.uid),
+
+      sentAt: serverTimestamp(),
+
+      updatedAt: serverTimestamp(),
+    },
+
+    {
+      merge: true,
+    },
+  );
+}
+
+type ListenToParentChannelInput = {
+  familyId: string;
+
+  parentUid: string;
+
+  onMessage: (message: WalkiChannelMessage) => void;
+
+  onEmpty?: () => void;
+
+  onError?: (error: Error) => void;
+};
+
+export function listenToParentChannel({
+  familyId,
+  parentUid,
+  onMessage,
+  onEmpty,
+  onError,
+}: ListenToParentChannelInput) {
+  if (!familyId) {
+    throw new Error("INVALID_FAMILY");
+  }
+
+  if (!parentUid) {
+    throw new Error("INVALID_PARENT");
+  }
+
+  const db = getFirestore();
+
+  const channelId = getParentChannelId(parentUid);
+
+  const channelRef = doc(db, "families", familyId, "channels", channelId);
+
+  return onSnapshot(
+    channelRef,
+
+    (snapshot) => {
+      if (!snapshot.exists()) {
+        onEmpty?.();
+
+        return;
+      }
+
+      const data = snapshot.data();
+
+      if (!data) {
+        return;
+      }
+
+      const message = parseChannelSnapshot(data, channelId);
+
+      if (!message) {
+        return;
+      }
+
+      /*
+       * Defensive validation:
+       *
+       * Parent inbox must belong to the parent
+       * this listener requested.
+       */
+
+      if (
+        message.channelType !== "parent" ||
+        message.targetParentUid !== parentUid
+      ) {
+        return;
+      }
+
+      onMessage(message);
+    },
+
+    (error) => {
+      console.error("Walki parent channel listener error:", error);
+
+      onError?.(
+        error instanceof Error
+          ? error
+          : new Error("PARENT_CHANNEL_LISTENER_FAILED"),
+      );
+    },
+  );
+}

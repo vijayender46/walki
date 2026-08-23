@@ -1,11 +1,11 @@
 import { getAuth } from "@react-native-firebase/auth";
 
 import {
-    doc,
-    getDoc,
-    getFirestore,
-    runTransaction,
-    serverTimestamp,
+  doc,
+  getDoc,
+  getFirestore,
+  runTransaction,
+  serverTimestamp,
 } from "@react-native-firebase/firestore";
 
 type JoinParentFamilyResult = {
@@ -120,24 +120,58 @@ export async function joinFamilyAsParent(
       throw new Error("INVALID_INVITE");
     }
 
+    /*
+     * Consume the parent invite.
+     */
     transaction.update(inviteRef, {
       used: true,
       usedBy: user.uid,
       usedAt: serverTimestamp(),
     });
 
+    /*
+     * Restore the family on the parent's
+     * existing user profile.
+     */
     transaction.update(userRef, {
       familyId,
       updatedAt: serverTimestamp(),
     });
 
-    transaction.set(familyMemberRef, {
-      uid: user.uid,
-      role: "parent",
-      joinedViaInviteCode: cleanedCode,
-      joinedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    /*
+     * Create OR restore the family membership.
+     *
+     * Important:
+     * A parent who previously left still has a
+     * membership document with status "removed".
+     *
+     * Setting status back to "active" makes the
+     * same account a valid family member again.
+     */
+    transaction.set(
+      familyMemberRef,
+      {
+        uid: user.uid,
+        role: "parent",
+
+        status: "active",
+
+        joinedViaInviteCode: cleanedCode,
+        joinedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      {
+        merge: true,
+      },
+    );
+  });
+
+  const verifyMember = await getDoc(familyMemberRef);
+
+  console.log("VERIFY PARENT MEMBERSHIP:", {
+    exists: verifyMember.exists(),
+    path: `families/${familyId}/members/${user.uid}`,
+    data: verifyMember.exists() ? verifyMember.data() : null,
   });
 
   return {

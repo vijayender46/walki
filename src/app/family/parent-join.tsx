@@ -3,23 +3,25 @@ import { router } from "expo-router";
 import { useState } from "react";
 
 import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    ActivityIndicator,
+    Pressable,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 
 import { useAuth } from "@/features/auth/AuthContext";
-import { joinFamilyWithCode } from "@/features/family/kidJoinService";
+import { joinFamilyAsParent } from "@/features/family/parentJoinService";
 import { colors, radius, spacing, typography } from "@/theme";
 
-export default function KidJoinScreen() {
+export default function ParentJoinScreen() {
   const { refreshProfile } = useAuth();
 
   const [code, setCode] = useState("");
+
   const [isJoining, setIsJoining] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
 
   const isValid = /^\d{6}$/.test(code);
@@ -40,56 +42,25 @@ export default function KidJoinScreen() {
       setIsJoining(true);
       setError(null);
 
-      const result = await joinFamilyWithCode(code);
+      await joinFamilyAsParent(code);
 
       /*
-       * ======================================
-       * EXISTING KID RECONNECT
-       * ======================================
+       * Critical:
        *
-       * Permanent code and legacy reconnect both
-       * return:
+       * The parent user document now contains
+       * the joined familyId.
        *
-       * reconnect: true
-       *
-       * The kid profile already exists, so do NOT
-       * send the device through /kid/setup again.
+       * Refresh AuthContext before navigating
+       * so Home immediately renders the new
+       * family's kids and Walki channels.
        */
-      if (result.reconnect) {
-        /*
-         * AuthContext may still contain the old/null
-         * profile until Firestore is refreshed.
-         *
-         * Refresh before navigating so Home opens
-         * immediately with the restored kid name,
-         * theme, familyId and stable kidId.
-         */
-        await refreshProfile();
+      await refreshProfile();
 
-        router.replace("/home");
+      router.replace("/home");
+    } catch (joinError) {
+      console.error("Parent join error:", joinError);
 
-        return;
-      }
-
-      /*
-       * ======================================
-       * BRAND-NEW KID
-       * ======================================
-       *
-       * A newly-created logical kid still needs
-       * name + colour setup.
-       */
-      router.replace({
-        pathname: "/kid/setup",
-
-        params: {
-          familyId: result.familyId,
-        },
-      });
-    } catch (err: unknown) {
-      console.error("Kid join error:", err);
-
-      const message = err instanceof Error ? err.message : "";
+      const message = joinError instanceof Error ? joinError.message : "";
 
       switch (message) {
         case "INVALID_CODE":
@@ -97,43 +68,36 @@ export default function KidJoinScreen() {
           break;
 
         case "INVITE_NOT_FOUND":
-        case "CODE_NOT_FOUND":
-        case "PAIR_CODE_NOT_FOUND":
-          setError("We couldn't find that Walki code.");
+          setError("We couldn't find that invite code.");
           break;
 
         case "INVITE_ALREADY_USED":
-          setError("That invite code has already been used.");
+          setError("That parent invite has already been used.");
           break;
 
-        case "INVITE_NOT_FOR_KID":
-          setError("This invite is for a parent, not a kid device.");
+        case "INVITE_NOT_FOR_PARENT":
+          setError("That code is for a kid device, not a parent.");
           break;
 
-        case "KID_DEVICE_ALREADY_SIGNED_IN":
-          setError("This device is already signed in to another account.");
+        case "NOT_AUTHENTICATED":
+        case "PARENT_ACCOUNT_REQUIRED":
+          setError("Please sign in with a parent account first.");
           break;
 
-        case "PAIR_CODE_DISABLED":
-          setError("This device code is currently disabled.");
+        case "PARENT_PROFILE_REQUIRED":
+          setError("A Walki parent profile is required before joining.");
           break;
 
-        case "PAIRING_NOT_ENABLED":
-          setError("Ask your parent to tap Allow new device first.");
+        case "ALREADY_IN_FAMILY":
+          setError("This parent account is already connected to a family.");
           break;
 
-        case "KID_REMOVED":
-          setError("This kid is no longer connected to that family.");
-          break;
-
-        case "PAIR_CODE_MISMATCH":
-        case "INVALID_PAIR_CODE":
-        case "INVALID_PAIR_CODE_RECORD":
-          setError("That device code is not valid.");
+        case "INVALID_INVITE":
+          setError("That parent invite is no longer valid.");
           break;
 
         default:
-          setError("We couldn't connect your device. Please try again.");
+          setError("We couldn't join the family. Please try again.");
       }
     } finally {
       setIsJoining(false);
@@ -150,7 +114,7 @@ export default function KidJoinScreen() {
           if (router.canGoBack()) {
             router.back();
           } else {
-            router.replace("/welcome");
+            router.replace("/home");
           }
         }}
         style={styles.backButton}
@@ -159,16 +123,20 @@ export default function KidJoinScreen() {
       </Pressable>
 
       <View style={styles.content}>
-        <Text style={styles.eyebrow}>KID DEVICE</Text>
+        <View style={styles.iconCircle}>
+          <Ionicons name="people-outline" size={36} color={colors.primary} />
+        </View>
+
+        <Text style={styles.eyebrow}>PARENT</Text>
 
         <Text style={styles.title}>Join your family</Text>
 
         <Text style={styles.subtitle}>
-          Ask your parent for the 6-digit Walki code.
+          Enter the one-time 6-digit code from the parent who invited you.
         </Text>
 
         <TextInput
-          accessibilityLabel="Family invite code"
+          accessibilityLabel="Parent family invite code"
           autoFocus
           keyboardType="number-pad"
           maxLength={6}
@@ -200,6 +168,18 @@ export default function KidJoinScreen() {
             <Text style={styles.joinButtonText}>Join family</Text>
           )}
         </Pressable>
+
+        <View style={styles.infoRow}>
+          <Ionicons
+            name="shield-checkmark-outline"
+            size={18}
+            color={colors.textMuted}
+          />
+
+          <Text style={styles.infoText}>
+            Parent invites work once and cannot be reused.
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -232,44 +212,63 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
 
+    alignItems: "center",
+
     justifyContent: "center",
+  },
+
+  iconCircle: {
+    width: 72,
+    height: 72,
+
+    alignItems: "center",
+
+    justifyContent: "center",
+
+    borderRadius: 36,
+
+    backgroundColor: colors.surface,
   },
 
   eyebrow: {
     ...typography.caption,
 
+    marginTop: spacing.lg,
+
     fontWeight: "700",
 
     letterSpacing: 1.4,
 
-    textAlign: "center",
-
-    color: "#FF5CA8",
+    color: colors.primary,
   },
 
   title: {
     ...typography.title,
 
-    fontSize: 36,
+    marginTop: spacing.sm,
+
+    fontSize: 32,
 
     textAlign: "center",
 
     color: colors.textPrimary,
-
-    marginTop: spacing.md,
   },
 
   subtitle: {
     ...typography.body,
 
+    maxWidth: 330,
+
+    marginTop: spacing.md,
+
     textAlign: "center",
 
     color: colors.textSecondary,
-
-    marginTop: spacing.md,
   },
 
   input: {
+    width: "100%",
+
     minHeight: 72,
 
     marginTop: spacing.xxxl,
@@ -296,25 +295,27 @@ const styles = StyleSheet.create({
   error: {
     ...typography.caption,
 
+    marginTop: spacing.md,
+
     textAlign: "center",
 
     color: colors.danger,
-
-    marginTop: spacing.md,
   },
 
   joinButton: {
+    width: "100%",
+
     minHeight: 58,
 
     alignItems: "center",
 
     justifyContent: "center",
 
+    marginTop: spacing.xxl,
+
     borderRadius: radius.md,
 
-    backgroundColor: "#FF5CA8",
-
-    marginTop: spacing.xxl,
+    backgroundColor: colors.primary,
   },
 
   joinButtonDisabled: {
@@ -333,5 +334,21 @@ const styles = StyleSheet.create({
     ...typography.button,
 
     color: colors.white,
+  },
+
+  infoRow: {
+    flexDirection: "row",
+
+    alignItems: "center",
+
+    marginTop: spacing.lg,
+  },
+
+  infoText: {
+    ...typography.caption,
+
+    marginLeft: spacing.sm,
+
+    color: colors.textMuted,
   },
 });

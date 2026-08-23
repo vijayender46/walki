@@ -8,15 +8,40 @@ import { downloadWalkiAudio } from "./audioDownloadService";
 
 import {
   getKidChannelId,
+  getParentChannelId,
   listenToFamilyChannel,
   listenToKidChannel,
+  listenToParentChannel,
   type WalkiChannelMessage,
 } from "./walkiChannelService";
 
 type UseWalkiFamilyChannelInput = {
   familyId: string | null | undefined;
 
+  /*
+   * EXISTING compatibility API.
+   *
+   * Parent currently passes every kidId.
+   * Kid currently passes its own kidId.
+   *
+   * We keep this working while migrating.
+   */
   directKidIds?: string[];
+
+  /*
+   * NEW parent inbox.
+   *
+   * When supplied, this hook also listens to:
+   *
+   * parent_{directParentUid}
+   *
+   * Eventually Parent Home will use only:
+   *
+   * family
+   * +
+   * parent_{ownUid}
+   */
+  directParentUid?: string | null;
 
   playAudio: (uri: string) => Promise<void>;
 };
@@ -36,6 +61,7 @@ type UseWalkiFamilyChannelResult = {
 export function useWalkiFamilyChannel({
   familyId,
   directKidIds = [],
+  directParentUid = null,
   playAudio,
 }: UseWalkiFamilyChannelInput): UseWalkiFamilyChannelResult {
   const [lastReceivedAudioUri, setLastReceivedAudioUri] = useState<
@@ -54,15 +80,6 @@ export function useWalkiFamilyChannel({
    * ==========================================
    * APP FOREGROUND STATE
    * ==========================================
-   *
-   * Walki realtime listeners only need to stay
-   * connected while the app is active.
-   *
-   * Background:
-   * unsubscribe Firestore listeners
-   *
-   * Foreground:
-   * reconnect automatically
    */
 
   const [isAppActive, setIsAppActive] = useState(
@@ -75,11 +92,13 @@ export function useWalkiFamilyChannel({
 
       setIsAppActive(nextIsActive);
 
-      console.log(
-        nextIsActive
-          ? "Walki foreground — realtime listeners active."
-          : "Walki background — realtime listeners paused.",
-      );
+      if (__DEV__) {
+        console.log(
+          nextIsActive
+            ? "Walki foreground — realtime listeners active."
+            : "Walki background — realtime listeners paused.",
+        );
+      }
     };
 
     const subscription = AppState.addEventListener(
@@ -96,10 +115,6 @@ export function useWalkiFamilyChannel({
    * ==========================================
    * STABLE AUDIO PLAYER
    * ==========================================
-   *
-   * Keep the newest playback function without
-   * rebuilding Firestore listeners on every
-   * React render.
    */
 
   const playAudioRef = useRef(playAudio);
@@ -110,35 +125,37 @@ export function useWalkiFamilyChannel({
 
   /*
    * Last processed Firestore version
-   * for every Walki channel.
+   * per channel.
    */
 
   const handledVersionsRef = useRef<Record<string, string>>({});
 
   /*
-   * Tracks whether each channel has completed
-   * its first snapshot.
+   * Tracks whether each channel has delivered
+   * its initial Firestore state.
    */
 
   const initializedChannelsRef = useRef<Record<string, boolean>>({});
 
   /*
-   * Incoming transmissions must not try to
-   * play over each other.
+   * Prevent overlapping playback.
    */
 
   const playbackQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   /*
-   * Prevent asynchronous work from an old
-   * subscription continuing after teardown.
+   * Prevent stale asynchronous work after a
+   * subscription generation has been destroyed.
    */
 
   const activeGenerationRef = useRef(0);
 
   /*
-   * Produce one stable dependency for the
-   * collection of direct kid IDs.
+   * ==========================================
+   * STABLE DIRECT-KID DEPENDENCY
+   * ==========================================
+   *
+   * Existing behaviour preserved.
    */
 
   const directKidIdsKey = Array.from(
@@ -149,23 +166,29 @@ export function useWalkiFamilyChannel({
 
   /*
    * ==========================================
+   * STABLE PARENT INBOX ID
+   * ==========================================
+   */
+
+  const resolvedParentUid = directParentUid?.trim() ?? "";
+
+  /*
+   * ==========================================
    * REALTIME FIRESTORE LISTENERS
    * ==========================================
    */
 
   useEffect(() => {
     /*
-     * No family = nothing to listen to.
+     * No family.
      */
     if (!familyId) {
       return;
     }
 
     /*
-     * IMPORTANT OPTIMIZATION:
-     *
-     * Don't maintain Firestore realtime listeners
-     * while Walki is in the background.
+     * No realtime Firestore listener while the
+     * app is in the background.
      */
     if (!isAppActive) {
       return;
@@ -186,12 +209,8 @@ export function useWalkiFamilyChannel({
     let isMounted = true;
 
     /*
-     * Every new foreground subscription should
-     * establish fresh initial state.
-     *
-     * This also prevents an old message from
-     * automatically playing when the user simply
-     * returns to Walki.
+     * New foreground generation establishes fresh
+     * historical state.
      */
 
     handledVersionsRef.current = {};
@@ -208,14 +227,24 @@ export function useWalkiFamilyChannel({
 
     /*
      * ========================================
+     * EXPECTED SIGN-OUT LISTENER ERROR
+     * ========================================
+     */
+
+    const shouldIgnoreListenerError = (error: Error) => {
+      const message = String(error.message ?? "");
+
+      const isPermissionDenied =
+        message.includes("permission-denied") ||
+        message.includes("PERMISSION_DENIED");
+
+      return isPermissionDenied && !getAuth().currentUser;
+    };
+
+    /*
+     * ========================================
      * EMPTY CHANNEL
      * ========================================
-     *
-     * Critical first-message behavior:
-     *
-     * if Firestore confirms that a channel
-     * doesn't exist yet, the NEXT creation is
-     * a new live message and must play.
      */
 
     const markChannelEmpty = (channelId: string) => {
@@ -225,7 +254,9 @@ export function useWalkiFamilyChannel({
 
       initializedChannelsRef.current[channelId] = true;
 
-      console.log("Walki channel ready (empty):", channelId);
+      if (__DEV__) {
+        console.log("Walki channel ready (empty):", channelId);
+      }
     };
 
     /*
@@ -244,17 +275,16 @@ export function useWalkiFamilyChannel({
 
         setIncomingError(null);
 
-        console.log(
-          `Incoming Walki ${message.channelType} transmission:`,
-          message.audioKey,
-        );
+        if (__DEV__) {
+          console.log(
+            `Incoming Walki ${message.channelType} transmission:`,
+            message.audioKey,
+          );
+        }
 
         /*
-         * Download ONLY the exact R2 object
+         * Download only the exact R2 object
          * referenced by Firestore.
-         *
-         * No bucket listing.
-         * No polling.
          */
 
         const localUri = await downloadWalkiAudio({
@@ -266,11 +296,7 @@ export function useWalkiFamilyChannel({
         }
 
         /*
-         * The downloaded copy is reused by
-         * Play Last Message.
-         *
-         * Therefore repeated replay does NOT
-         * need another R2 download.
+         * Cached locally for Play Last Message.
          */
 
         setLastReceivedAudioUri(localUri);
@@ -283,9 +309,11 @@ export function useWalkiFamilyChannel({
           return;
         }
 
-        console.log(
-          `Incoming Walki ${message.channelType} transmission played.`,
-        );
+        if (__DEV__) {
+          console.log(
+            `Incoming Walki ${message.channelType} transmission played.`,
+          );
+        }
       } catch (error) {
         console.error("Incoming Walki playback error:", error);
 
@@ -312,16 +340,18 @@ export function useWalkiFamilyChannel({
 
       const channelId = message.channelId;
 
-      console.log("Walki channel snapshot:", {
-        channelId,
+      if (__DEV__) {
+        console.log("Walki channel snapshot:", {
+          channelId,
 
-        version: message.version,
+          version: message.version,
 
-        senderUid: message.senderUid,
-      });
+          senderUid: message.senderUid,
+        });
+      }
 
       /*
-       * Sender never plays its own transmission.
+       * Never replay own transmission.
        */
 
       if (message.senderUid === currentUser.uid) {
@@ -333,7 +363,7 @@ export function useWalkiFamilyChannel({
       }
 
       /*
-       * Ignore duplicate Firestore events.
+       * Ignore duplicate snapshot/version.
        */
 
       if (handledVersionsRef.current[channelId] === message.version) {
@@ -341,11 +371,8 @@ export function useWalkiFamilyChannel({
       }
 
       /*
-       * Existing channel state when Walki first
-       * becomes active is treated as historical.
-       *
-       * We don't suddenly play yesterday's or a
-       * background message when the app opens.
+       * Existing state at subscription startup
+       * is historical and must not suddenly play.
        */
 
       if (!initializedChannelsRef.current[channelId]) {
@@ -353,25 +380,28 @@ export function useWalkiFamilyChannel({
 
         handledVersionsRef.current[channelId] = message.version;
 
-        console.log("Walki existing channel state ignored:", channelId);
+        if (__DEV__) {
+          console.log("Walki existing channel state ignored:", channelId);
+        }
 
         return;
       }
 
       /*
-       * Mark version before starting async work.
+       * Mark before async processing so duplicate
+       * snapshots cannot queue duplicate playback.
        */
 
       handledVersionsRef.current[channelId] = message.version;
 
-      console.log("Walki new live transmission accepted:", channelId);
+      if (__DEV__) {
+        console.log("Walki new live transmission accepted:", channelId);
+      }
 
       playbackQueueRef.current = playbackQueueRef.current
-
         .catch((queueError) => {
           console.error("Previous Walki playback queue error:", queueError);
         })
-
         .then(async () => {
           if (!isStillActive()) {
             return;
@@ -385,6 +415,9 @@ export function useWalkiFamilyChannel({
      * ========================================
      * FAMILY BROADCAST
      * ========================================
+     *
+     * Every active family device keeps this
+     * listener.
      */
 
     const unsubscribeFamily = listenToFamilyChannel({
@@ -397,6 +430,14 @@ export function useWalkiFamilyChannel({
       onMessage: handleChannelMessage,
 
       onError: (error) => {
+        if (shouldIgnoreListenerError(error)) {
+          if (__DEV__) {
+            console.log("Walki family listener closed after sign-out.");
+          }
+
+          return;
+        }
+
         console.error("Family Walki listener error:", error);
 
         if (isStillActive()) {
@@ -409,6 +450,11 @@ export function useWalkiFamilyChannel({
      * ========================================
      * DIRECT KID CHANNELS
      * ========================================
+     *
+     * EXISTING compatibility path.
+     *
+     * This is intentionally retained until Home
+     * has migrated to the personal inbox model.
      */
 
     const unsubscribeKidChannels: (() => void)[] = [];
@@ -431,6 +477,16 @@ export function useWalkiFamilyChannel({
         onMessage: handleChannelMessage,
 
         onError: (error) => {
+          if (shouldIgnoreListenerError(error)) {
+            if (__DEV__) {
+              console.log(
+                `Walki direct listener closed after sign-out: ${kidId}`,
+              );
+            }
+
+            return;
+          }
+
           console.error(`Direct Walki listener error for ${kidId}:`, error);
 
           if (isStillActive()) {
@@ -444,15 +500,64 @@ export function useWalkiFamilyChannel({
 
     /*
      * ========================================
-     * CLEANUP
+     * DIRECT PARENT INBOX
      * ========================================
      *
-     * Triggered when:
+     * NEW.
      *
-     * app backgrounds
-     * family changes
-     * kid channels change
-     * component unmounts
+     * Optional during migration.
+     *
+     * Once Home passes the currently authenticated
+     * parent's UID, this becomes:
+     *
+     * parent_{uid}
+     */
+
+    let unsubscribeParentChannel: (() => void) | null = null;
+
+    if (resolvedParentUid) {
+      const channelId = getParentChannelId(resolvedParentUid);
+
+      unsubscribeParentChannel = listenToParentChannel({
+        familyId,
+
+        parentUid: resolvedParentUid,
+
+        onEmpty: () => {
+          markChannelEmpty(channelId);
+        },
+
+        onMessage: handleChannelMessage,
+
+        onError: (error) => {
+          if (shouldIgnoreListenerError(error)) {
+            if (__DEV__) {
+              console.log(
+                `Walki parent listener closed after sign-out: ${resolvedParentUid}`,
+              );
+            }
+
+            return;
+          }
+
+          console.error(
+            `Parent Walki listener error for ${resolvedParentUid}:`,
+            error,
+          );
+
+          if (isStillActive()) {
+            setIncomingError(
+              "We couldn't connect to your direct Walki channel.",
+            );
+          }
+        },
+      });
+    }
+
+    /*
+     * ========================================
+     * CLEANUP
+     * ========================================
      */
 
     return () => {
@@ -464,9 +569,11 @@ export function useWalkiFamilyChannel({
         unsubscribe();
       }
 
+      unsubscribeParentChannel?.();
+
       setIsReceiving(false);
     };
-  }, [familyId, directKidIdsKey, isAppActive]);
+  }, [familyId, directKidIdsKey, resolvedParentUid, isAppActive]);
 
   /*
    * ==========================================
@@ -486,6 +593,7 @@ export function useWalkiFamilyChannel({
 
   return {
     lastReceivedAudioUri,
+
     lastReceivedAudioKey,
 
     isReceiving,

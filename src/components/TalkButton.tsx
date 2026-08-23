@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Ionicons } from "@expo/vector-icons";
 
+import { WALKI_CONFIG } from "@/constants/walkiConfig";
 import { colors, radius, spacing, typography } from "@/theme";
 
 type TalkButtonProps = {
@@ -10,35 +11,59 @@ type TalkButtonProps = {
 
   disabled?: boolean;
 
-  /*
-   * Kid mode makes the control larger,
-   * bolder and more playful.
-   */
   kidMode?: boolean;
 
-  /*
-   * Parent mode keeps it slightly more
-   * compact so Home fits comfortably.
-   */
   isRecording?: boolean;
 
   isSending?: boolean;
 
   isReceiving?: boolean;
+
+  /*
+   * Cooldown after a Walki message finishes.
+   */
+  isLocked?: boolean;
+
+  /*
+   * Only displayed while actively recording.
+   */
+  durationMillis?: number;
 };
 
 export function TalkButton({
   onPressIn,
   onPressOut,
+
   disabled = false,
+
   kidMode = false,
+
   isRecording = false,
+
   isSending = false,
+
   isReceiving = false,
+
+  isLocked = false,
+
+  durationMillis = 0,
 }: TalkButtonProps) {
+  /*
+   * Recording countdown only.
+   *
+   * Nothing is displayed during cooldown.
+   */
+  const remainingRecordingSeconds =
+    Math.max(0, WALKI_CONFIG.audio.maxRecordingDurationMs - durationMillis) /
+    1000;
+
   const getMainLabel = () => {
     if (isRecording) {
       return "TALKING";
+    }
+
+    if (isLocked) {
+      return "LOCKED";
     }
 
     if (isSending) {
@@ -54,7 +79,11 @@ export function TalkButton({
 
   const getHelperLabel = () => {
     if (isRecording) {
-      return "Release to send";
+      return `${remainingRecordingSeconds.toFixed(1)}s  •  Release to send`;
+    }
+
+    if (isLocked) {
+      return "Walki sent";
     }
 
     if (isSending) {
@@ -68,11 +97,32 @@ export function TalkButton({
     return kidMode ? "Press and keep holding" : "Press and hold";
   };
 
+  const getIconName = () => {
+    if (isRecording) {
+      return "radio";
+    }
+
+    if (isLocked) {
+      return "lock-closed";
+    }
+
+    if (isReceiving) {
+      return "volume-high";
+    }
+
+    return "mic";
+  };
+
   return (
     <View style={styles.wrapper}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Hold to talk"
+        accessibilityLabel={
+          isLocked ? "Walki temporarily locked" : "Hold to talk"
+        }
+        accessibilityState={{
+          disabled,
+        }}
         disabled={disabled}
         onPressIn={onPressIn}
         onPressOut={onPressOut}
@@ -83,18 +133,28 @@ export function TalkButton({
 
           isRecording && styles.recordingButton,
 
-          isReceiving && styles.receivingButton,
+          isReceiving && !isLocked && styles.receivingButton,
 
-          isSending && styles.sendingButton,
+          isSending && !isLocked && styles.sendingButton,
 
-          disabled && styles.disabledButton,
+          isLocked && styles.lockedButton,
+
+          disabled && !isLocked && styles.disabledButton,
 
           pressed && !disabled && styles.pressedButton,
         ]}
       >
-        <View style={[styles.iconCircle, kidMode && styles.kidIconCircle]}>
+        <View
+          style={[
+            styles.iconCircle,
+
+            kidMode && styles.kidIconCircle,
+
+            isLocked && styles.lockedIconCircle,
+          ]}
+        >
           <Ionicons
-            name={isRecording ? "radio" : isReceiving ? "volume-high" : "mic"}
+            name={getIconName()}
             size={kidMode ? 46 : 38}
             color={colors.white}
           />
@@ -127,11 +187,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
 
     shadowColor: "#000",
+
     shadowOffset: {
       width: 0,
       height: 6,
     },
+
     shadowOpacity: 0.16,
+
     shadowRadius: 10,
 
     elevation: 6,
@@ -172,6 +235,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.20)",
   },
 
+  lockedIconCircle: {
+    backgroundColor: "rgba(255,255,255,0.24)",
+  },
+
   mainLabel: {
     ...typography.button,
 
@@ -188,6 +255,7 @@ const styles = StyleSheet.create({
 
   kidMainLabel: {
     fontSize: 17,
+
     letterSpacing: 1,
   },
 
@@ -203,6 +271,7 @@ const styles = StyleSheet.create({
 
   kidHelperLabel: {
     fontSize: 12,
+
     fontWeight: "600",
   },
 
@@ -222,6 +291,22 @@ const styles = StyleSheet.create({
 
   sendingButton: {
     opacity: 0.72,
+  },
+
+  lockedButton: {
+    backgroundColor: "#F59E0B",
+
+    opacity: 1,
+
+    transform: [
+      {
+        scale: 1,
+      },
+    ],
+
+    shadowOpacity: 0.22,
+
+    elevation: 7,
   },
 
   pressedButton: {
