@@ -7,7 +7,7 @@ import {
   onSnapshot,
 } from "@react-native-firebase/firestore";
 
-import type { UserProfile } from "@/features/auth/types";
+import type { ParentType, UserProfile } from "@/features/auth/types";
 
 /*
  * ==========================================
@@ -29,6 +29,14 @@ export type KidHomeFamilyMember = {
 
   theme: "blue" | "pink";
 
+  /*
+   * Only parent members use this.
+   *
+   * Optional keeps existing / legacy profiles
+   * fully compatible.
+   */
+  parentType?: ParentType | null;
+
   isPrimaryParent: boolean;
 };
 
@@ -36,13 +44,6 @@ export type KidHomeFamilyMember = {
  * ==========================================
  * MAP STABLE KID DOCUMENTS
  * ==========================================
- *
- * Shared by:
- *
- * getFamilyKids()
- * listenToFamilyKids()
- *
- * Stable logical kid identity is always used.
  */
 
 function mapFamilyKids(
@@ -94,9 +95,6 @@ function mapFamilyKids(
     kids.push(profile);
   }
 
-  /*
-   * Keep avatar order stable across snapshots.
-   */
   kids.sort((a, b) =>
     (a.displayName || "Kid").localeCompare(b.displayName || "Kid"),
   );
@@ -108,8 +106,6 @@ function mapFamilyKids(
  * ==========================================
  * ONE-TIME FAMILY KIDS READ
  * ==========================================
- *
- * Existing Parent Home API.
  */
 
 export async function getFamilyKids(familyId: string): Promise<UserProfile[]> {
@@ -130,8 +126,6 @@ export async function getFamilyKids(familyId: string): Promise<UserProfile[]> {
  * ==========================================
  * REALTIME FAMILY KIDS LISTENER
  * ==========================================
- *
- * Existing Parent Home API.
  */
 
 type ListenToFamilyKidsInput = {
@@ -195,28 +189,6 @@ export function listenToFamilyKids({
  * ==========================================
  * KID HOME FAMILY MEMBERS
  * ==========================================
- *
- * Kid Home needs:
- *
- * Parent 1
- * Parent 2
- * Other kids / siblings
- *
- * The current kid is intentionally excluded.
- *
- * Source of truth:
- *
- * families/{familyId}
- *     → primary parentUid
- *
- * families/{familyId}/members
- *     → active family membership
- *
- * users/{parentUid}
- *     → parent display profile
- *
- * families/{familyId}/kids
- *     → stable kid profiles
  */
 
 export async function getFamilyMembersForKid(
@@ -235,10 +207,6 @@ export async function getFamilyMembersForKid(
 
   const kidsRef = collection(db, "families", familyId, "kids");
 
-  /*
-   * Load the family, memberships and stable kids
-   * concurrently.
-   */
   const [familySnapshot, membersSnapshot, kidsSnapshot] = await Promise.all([
     getDoc(familyRef),
     getDocs(membersRef),
@@ -251,13 +219,6 @@ export async function getFamilyMembersForKid(
 
   const familyData = familySnapshot.data();
 
-  /*
-   * The original family creator is always the
-   * primary parent.
-   *
-   * Older Walki families may have this parent only
-   * in family.parentUid and not yet in /members.
-   */
   const primaryParentUid = String(familyData?.parentUid ?? "");
 
   /*
@@ -281,10 +242,6 @@ export async function getFamilyMembersForKid(
 
     const kidId = String(data.kidId ?? kidDocument.id);
 
-    /*
-     * Don't show the logged-in kid inside their
-     * own My Family row.
-     */
     if (currentKidId && kidId === currentKidId) {
       continue;
     }
@@ -298,6 +255,8 @@ export async function getFamilyMembersForKid(
 
       theme: data.theme === "blue" ? "blue" : "pink",
 
+      parentType: null,
+
       isPrimaryParent: false,
     });
   }
@@ -306,13 +265,6 @@ export async function getFamilyMembersForKid(
    * ==========================================
    * ACTIVE FAMILY MEMBERS
    * ==========================================
-   *
-   * Set prevents duplicate parents.
-   *
-   * IMPORTANT:
-   * Start with family.parentUid so legacy family
-   * creators are included even if their /members
-   * document does not exist.
    */
 
   const parentUids = new Set<string>();
@@ -330,12 +282,6 @@ export async function getFamilyMembersForKid(
       continue;
     }
 
-    /*
-     * Current status is authoritative.
-     *
-     * Historical leftAt does not matter if the
-     * member is active again.
-     */
     if (data.status === "removed") {
       continue;
     }
@@ -363,10 +309,6 @@ export async function getFamilyMembersForKid(
    * ==========================================
    * LOAD PARENT PROFILES
    * ==========================================
-   *
-   * Parent names/profile information lives in:
-   *
-   * users/{parentUid}
    */
 
   const parentProfiles = await Promise.all(
@@ -386,6 +328,18 @@ export async function getFamilyMembersForKid(
           return null;
         }
 
+        /*
+         * Existing parent profiles created
+         * before parentType was introduced
+         * safely fall back to null.
+         */
+        const parentType: ParentType | null =
+          data.parentType === "mom"
+            ? "mom"
+            : data.parentType === "dad"
+              ? "dad"
+              : null;
+
         return {
           uid: parentUid,
 
@@ -394,6 +348,8 @@ export async function getFamilyMembersForKid(
           displayName: String(data.displayName ?? "Parent"),
 
           theme: data.theme === "pink" ? "pink" : "blue",
+
+          parentType,
 
           isPrimaryParent: parentUid === primaryParentUid,
         };
@@ -426,7 +382,7 @@ export async function getFamilyMembersForKid(
   /*
    * Display order:
    *
-   * 1. Primary parent / family creator
+   * 1. Primary parent
    * 2. Other parent(s)
    * 3. Kids alphabetically
    */

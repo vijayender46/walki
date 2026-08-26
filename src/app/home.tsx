@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +16,8 @@ import { router } from "expo-router";
 import { AddMemberModal } from "@/components/AddMemberModal";
 import { KidHome } from "@/components/KidHome";
 import { TalkButton } from "@/components/TalkButton";
+
+import { getDefaultAvatar } from "@/constants/defaultAvatars";
 
 import { uploadWalkiAudio } from "@/features/audio/audioUploadService";
 import { useWalkiFamilyChannel } from "@/features/audio/useWalkiFamilyChannel";
@@ -40,13 +43,7 @@ import {
   createParentInvite,
 } from "@/features/family/familyService";
 
-import {
-  colors,
-  gradients,
-  shadows,
-  spacing,
-  typography
-} from "@/theme";
+import { colors, gradients, shadows, spacing, typography } from "@/theme";
 
 export default function HomeScreen() {
   const { profile, refreshProfile } = useAuth();
@@ -319,10 +316,6 @@ export default function HomeScreen() {
         await publishKidMessage({
           familyId: currentProfile.familyId,
 
-          /*
-           * KidHomeFamilyMember.uid represents
-           * the stable logical kidId.
-           */
           kidId: selectedKidRecipient.uid,
 
           audioKey: upload.key,
@@ -337,11 +330,6 @@ export default function HomeScreen() {
        * ======================================
        * FAMILY BROADCAST
        * ======================================
-       *
-       * Parent behaviour stays exactly as it was.
-       *
-       * Kid with no selected recipient also
-       * broadcasts to the entire family.
        */
 
       await publishFamilyMessage({
@@ -359,12 +347,6 @@ export default function HomeScreen() {
     } finally {
       setIsSending(false);
     }
-  };
-
-  const getInitial = (name: string) => {
-    const value = name.trim();
-
-    return value ? value.charAt(0).toUpperCase() : "K";
   };
 
   /*
@@ -461,9 +443,13 @@ export default function HomeScreen() {
             style={styles.parentAvatarOuter}
           >
             <View style={styles.parentAvatar}>
-              <Text style={styles.parentAvatarText}>
-                {getInitial(profile.displayName)}
-              </Text>
+              <Image
+                source={getDefaultAvatar({
+                  role: "parent",
+                })}
+                style={styles.parentAvatarImage}
+                resizeMode="cover"
+              />
             </View>
 
             <View style={styles.onlineDot} />
@@ -507,17 +493,14 @@ export default function HomeScreen() {
                       ]}
                     >
                       <View style={styles.familyAvatarInner}>
-                        <Text
-                          style={[
-                            styles.familyAvatarText,
-
-                            isPink
-                              ? styles.avatarTextPink
-                              : styles.avatarTextBlue,
-                          ]}
-                        >
-                          {getInitial(kid.displayName)}
-                        </Text>
+                        <Image
+                          source={getDefaultAvatar({
+                            role: "kid",
+                            theme: kid.theme,
+                          })}
+                          style={styles.familyAvatarImage}
+                          resizeMode="cover"
+                        />
                       </View>
 
                       <View style={styles.memberOnlineDot} />
@@ -762,16 +745,17 @@ const styles = StyleSheet.create({
 
     borderRadius: 29,
 
+    overflow: "hidden",
+
     alignItems: "center",
     justifyContent: "center",
 
     backgroundColor: "#FFE7CA",
   },
 
-  parentAvatarText: {
-    fontSize: 23,
-    fontWeight: "800",
-    color: colors.parent.primary,
+  parentAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
 
   onlineDot: {
@@ -843,11 +827,7 @@ const styles = StyleSheet.create({
   },
 
   familyMemberPressed: {
-    transform: [
-      {
-        scale: 0.95,
-      },
-    ],
+    transform: [{ scale: 0.95 }],
     opacity: 0.8,
   },
 
@@ -881,23 +861,17 @@ const styles = StyleSheet.create({
 
     borderRadius: 28,
 
+    overflow: "hidden",
+
     alignItems: "center",
     justifyContent: "center",
 
     backgroundColor: "#F8F8FA",
   },
 
-  familyAvatarText: {
-    fontSize: 21,
-    fontWeight: "800",
-  },
-
-  avatarTextBlue: {
-    color: colors.boy.primary,
-  },
-
-  avatarTextPink: {
-    color: colors.girl.primary,
+  familyAvatarImage: {
+    width: "100%",
+    height: "100%",
   },
 
   memberOnlineDot: {

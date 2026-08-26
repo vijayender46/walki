@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +15,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 
 import { TalkButton } from "@/components/TalkButton";
+
+import { getDefaultAvatar } from "@/constants/defaultAvatars";
 
 import type { UserProfile } from "@/features/auth/types";
 
@@ -124,16 +127,6 @@ export function KidHome({
     };
   }, [profile.familyId, kidProfile.kidId]);
 
-  const getInitial = (name: string, fallback = "K") => {
-    const cleaned = name.trim();
-
-    if (!cleaned) {
-      return fallback;
-    }
-
-    return cleaned.charAt(0).toUpperCase();
-  };
-
   const getTalkLabel = () => {
     if (isReceiving) {
       return "INCOMING WALKI...";
@@ -232,16 +225,14 @@ export function KidHome({
                 },
               ]}
             >
-              <Text
-                style={[
-                  styles.avatarText,
-                  {
-                    color: theme.primary,
-                  },
-                ]}
-              >
-                {getInitial(profile.displayName)}
-              </Text>
+              <Image
+                source={getDefaultAvatar({
+                  role: "kid",
+                  theme: profile.theme,
+                })}
+                style={styles.avatarImage}
+                resizeMode="cover"
+              />
             </View>
 
             <View style={styles.onlineDot} />
@@ -343,19 +334,15 @@ export function KidHome({
                           },
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.familyAvatarText,
-                            {
-                              color: memberColor,
-                            },
-                          ]}
-                        >
-                          {getInitial(
-                            member.displayName,
-                            member.role === "parent" ? "P" : "K",
-                          )}
-                        </Text>
+                        <Image
+                          source={getDefaultAvatar({
+                            role: member.role,
+                            theme: member.theme,
+                            parentType: member.parentType,
+                          })}
+                          style={styles.familyAvatarImage}
+                          resizeMode="cover"
+                        />
                       </View>
 
                       <View style={styles.memberOnlineDot} />
@@ -719,15 +706,18 @@ const styles = StyleSheet.create({
 
     borderRadius: 30,
 
+    overflow: "hidden",
+
     alignItems: "center",
 
     justifyContent: "center",
   },
 
-  avatarText: {
-    fontSize: 25,
+  avatarImage: {
+    width: "100%",
+    height: "100%",
 
-    fontWeight: "800",
+    borderRadius: 30,
   },
 
   onlineDot: {
@@ -862,15 +852,18 @@ const styles = StyleSheet.create({
 
     borderRadius: 26,
 
+    overflow: "hidden",
+
     alignItems: "center",
 
     justifyContent: "center",
   },
 
-  familyAvatarText: {
-    fontSize: 20,
+  familyAvatarImage: {
+    width: "100%",
+    height: "100%",
 
-    fontWeight: "800",
+    borderRadius: 26,
   },
 
   memberOnlineDot: {
