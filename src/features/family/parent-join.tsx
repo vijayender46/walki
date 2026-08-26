@@ -2,12 +2,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
 import { useAuth } from "@/features/auth/AuthContext";
@@ -51,6 +51,10 @@ export default function ParentJoinScreen() {
       switch (message) {
         case "INVITE_NOT_FOUND":
           setError("We couldn't find that parent invite.");
+          break;
+
+        case "INVITE_EXPIRED":
+          setError("That parent invite has expired. Ask for a new code.");
           break;
 
         case "INVITE_ALREADY_USED":

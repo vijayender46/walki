@@ -19,6 +19,45 @@ type JoinFamilyResult = {
 
 /*
  * ============================================================
+ * FAMILY INVITE EXPIRY
+ * ============================================================
+ *
+ * Applies ONLY to temporary familyInvites.
+ *
+ * Permanent kidPairCodes remain unchanged and do not use this.
+ *
+ * Legacy invites without expiresAt remain valid.
+ */
+
+function isFamilyInviteExpired(expiresAt: unknown): boolean {
+  if (!expiresAt) {
+    return false;
+  }
+
+  if (expiresAt instanceof Date) {
+    return expiresAt.getTime() <= Date.now();
+  }
+
+  if (typeof expiresAt === "object" && expiresAt !== null) {
+    const timestamp = expiresAt as {
+      toMillis?: () => number;
+      toDate?: () => Date;
+    };
+
+    if (typeof timestamp.toMillis === "function") {
+      return timestamp.toMillis() <= Date.now();
+    }
+
+    if (typeof timestamp.toDate === "function") {
+      return timestamp.toDate().getTime() <= Date.now();
+    }
+  }
+
+  return false;
+}
+
+/*
+ * ============================================================
  * PUBLIC ENTRY
  * ============================================================
  *
@@ -96,6 +135,16 @@ export async function joinFamilyWithCode(
 
     if (!invite) {
       throw new Error("INVALID_INVITE");
+    }
+
+    /*
+     * Temporary family invite expiry.
+     *
+     * Firestore TTL deletion is asynchronous,
+     * so Walki rejects expired codes immediately.
+     */
+    if (isFamilyInviteExpired(invite.expiresAt)) {
+      throw new Error("INVITE_EXPIRED");
     }
 
     const invitedRole = String(invite.invitedRole ?? "kid");
@@ -252,6 +301,13 @@ async function joinAsNewKid({
 
       if (!inviteData) {
         throw new Error("INVALID_INVITE");
+      }
+
+      /*
+       * Re-check expiry inside transaction.
+       */
+      if (isFamilyInviteExpired(inviteData.expiresAt)) {
+        throw new Error("INVITE_EXPIRED");
       }
 
       if (inviteData.used === true) {
@@ -452,6 +508,13 @@ async function reconnectExistingKid({
 
       if (!inviteData) {
         throw new Error("INVALID_INVITE");
+      }
+
+      /*
+       * Re-check expiry inside reconnect transaction.
+       */
+      if (isFamilyInviteExpired(inviteData.expiresAt)) {
+        throw new Error("INVITE_EXPIRED");
       }
 
       if (inviteData.used === true) {

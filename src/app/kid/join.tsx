@@ -92,6 +92,11 @@ export default function KidJoinScreen() {
       const message = err instanceof Error ? err.message : "";
 
       switch (message) {
+        case "INVITE_EXPIRED":
+          setError(
+            "That Walki invite has expired. Ask your parent for a new code.",
+          );
+          break;
         case "INVALID_CODE":
           setError("Enter a valid 6-digit Walki code.");
           break;
