@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
 import {
   ActivityIndicator,
+  Animated,
   Image,
   Pressable,
   ScrollView,
@@ -43,6 +45,8 @@ import {
   createParentInvite,
 } from "@/features/family/familyService";
 
+import { acknowledgeSos, listenToFamilySos } from "@/features/sos/sosService";
+
 import { colors, gradients, shadows, spacing, typography } from "@/theme";
 
 export default function HomeScreen() {
@@ -61,6 +65,25 @@ export default function HomeScreen() {
   const [isSending, setIsSending] = useState(false);
 
   const [sendError, setSendError] = useState<string | null>(null);
+
+  /*
+   * ==========================================
+   * ACTIVE SOS KIDS
+   * ==========================================
+   *
+   * Stable kidIds currently reporting:
+   *
+   * status: "active"
+   */
+  const [activeSosKidIds, setActiveSosKidIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  /*
+   * One animation drives every currently active
+   * SOS avatar.
+   */
+  const sosFlash = useRef(new Animated.Value(0)).current;
 
   /*
    * ==========================================
@@ -147,6 +170,75 @@ export default function HomeScreen() {
   }, [profile?.familyId, profile?.role]);
 
   /*
+   * ==========================================
+   * PARENT SOS LISTENER
+   * ==========================================
+   *
+   * One realtime listener for the whole family's
+   * SOS collection.
+   */
+
+  useEffect(() => {
+    if (profile?.role !== "parent" || !profile.familyId) {
+      setActiveSosKidIds(new Set());
+
+      return;
+    }
+
+    const unsubscribe = listenToFamilySos({
+      familyId: profile.familyId,
+
+      onSos: (kidIds) => {
+        setActiveSosKidIds(kidIds);
+      },
+
+      onError: (error) => {
+        console.error("Parent SOS listener error:", error);
+      },
+    });
+
+    return unsubscribe;
+  }, [profile?.familyId, profile?.role]);
+
+  /*
+   * ==========================================
+   * SOS FLASH ANIMATION
+   * ==========================================
+   */
+
+  useEffect(() => {
+    if (activeSosKidIds.size === 0) {
+      sosFlash.stopAnimation();
+
+      sosFlash.setValue(0);
+
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(sosFlash, {
+          toValue: 1,
+          duration: 500,
+          useNativeDriver: false,
+        }),
+
+        Animated.timing(sosFlash, {
+          toValue: 0,
+          duration: 500,
+          useNativeDriver: false,
+        }),
+      ]),
+    );
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [activeSosKidIds.size, sosFlash]);
+
+  /*
    * Clear a Kid's selected recipient if the
    * authenticated account/family changes.
    */
@@ -230,7 +322,61 @@ export default function HomeScreen() {
     }
   };
 
-  const handleKidPress = (kid: UserProfile) => {
+  /*
+   * ==========================================
+   * PARENT KID PRESS
+   * ==========================================
+   *
+   * Normal kid:
+   * → open kid profile
+   *
+   * Kid with active SOS:
+   * → acknowledge SOS
+   * → stop local flash immediately
+   * → open kid profile
+   */
+
+  const handleKidPress = async (kid: UserProfile) => {
+    const currentProfile = profile;
+
+    const hasActiveSos = activeSosKidIds.has(kid.uid);
+
+    if (
+      hasActiveSos &&
+      currentProfile?.role === "parent" &&
+      currentProfile.familyId
+    ) {
+      try {
+        await acknowledgeSos({
+          familyId: currentProfile.familyId,
+
+          kidId: kid.uid,
+
+          parentUid: currentProfile.uid,
+        });
+
+        /*
+         * Optimistic local update.
+         *
+         * Firestore listener will shortly confirm
+         * the same state.
+         */
+        setActiveSosKidIds((current) => {
+          const next = new Set(current);
+
+          next.delete(kid.uid);
+
+          return next;
+        });
+      } catch (error) {
+        console.error("Acknowledge SOS error:", error);
+
+        setFamilyError("We couldn't acknowledge the SOS.");
+
+        return;
+      }
+    }
+
     router.push({
       pathname: "/kid/[uid]",
 
@@ -473,23 +619,47 @@ export default function HomeScreen() {
               {kids.map((kid) => {
                 const isPink = kid.theme === "pink";
 
+                const hasActiveSos = activeSosKidIds.has(kid.uid);
+
+                const sosBorderColor = sosFlash.interpolate({
+                  inputRange: [0, 1],
+
+                  outputRange: ["#DC2626", "#FF9A9A"],
+                });
+
                 return (
                   <Pressable
                     key={kid.uid}
-                    onPress={() => handleKidPress(kid)}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      hasActiveSos
+                        ? `${kid.displayName || "Kid"} has an active SOS`
+                        : kid.displayName || "Kid"
+                    }
+                    onPress={() => {
+                      void handleKidPress(kid);
+                    }}
                     style={({ pressed }) => [
                       styles.familyMember,
 
                       pressed && styles.familyMemberPressed,
                     ]}
                   >
-                    <View
+                    <Animated.View
                       style={[
                         styles.familyAvatarRing,
 
                         isPink
                           ? styles.familyAvatarPink
                           : styles.familyAvatarBlue,
+
+                        hasActiveSos && [
+                          styles.familyAvatarSos,
+
+                          {
+                            borderColor: sosBorderColor,
+                          },
+                        ],
                       ]}
                     >
                       <View style={styles.familyAvatarInner}>
@@ -504,11 +674,32 @@ export default function HomeScreen() {
                       </View>
 
                       <View style={styles.memberOnlineDot} />
-                    </View>
 
-                    <Text numberOfLines={1} style={styles.memberName}>
+                      {hasActiveSos ? (
+                        <View style={styles.sosBadge}>
+                          <Ionicons
+                            name="alert"
+                            size={11}
+                            color={colors.white}
+                          />
+                        </View>
+                      ) : null}
+                    </Animated.View>
+
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.memberName,
+
+                        hasActiveSos && styles.sosMemberName,
+                      ]}
+                    >
                       {kid.displayName || "Kid"}
                     </Text>
+
+                    {hasActiveSos ? (
+                      <Text style={styles.sosLabel}>SOS</Text>
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -855,6 +1046,21 @@ const styles = StyleSheet.create({
     borderColor: colors.girl.primary,
   },
 
+  /*
+   * SOS modifies only the existing avatar ring.
+   */
+  familyAvatarSos: {
+    borderWidth: 5,
+
+    shadowColor: "#DC2626",
+
+    shadowOpacity: 0.38,
+
+    shadowRadius: 12,
+
+    elevation: 8,
+  },
+
   familyAvatarInner: {
     width: 56,
     height: 56,
@@ -889,6 +1095,45 @@ const styles = StyleSheet.create({
 
     borderWidth: 2.5,
     borderColor: colors.white,
+  },
+
+  sosBadge: {
+    position: "absolute",
+
+    top: -6,
+    left: -6,
+
+    width: 22,
+    height: 22,
+
+    borderRadius: 11,
+
+    alignItems: "center",
+    justifyContent: "center",
+
+    backgroundColor: "#DC2626",
+
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+
+  sosMemberName: {
+    color: "#DC2626",
+
+    fontWeight: "800",
+  },
+
+  sosLabel: {
+    marginTop: 1,
+
+    fontSize: 9,
+    lineHeight: 11,
+
+    fontWeight: "900",
+
+    letterSpacing: 0.8,
+
+    color: "#DC2626",
   },
 
   addMemberCircle: {
