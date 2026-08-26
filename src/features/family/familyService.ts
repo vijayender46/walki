@@ -249,7 +249,9 @@ export async function createReconnectKidInvite(
   });
 }
 
-export async function createFamily() {
+export async function createFamily(
+  initialInviteRole: FamilyInviteRole = "kid",
+) {
   const auth = getAuth();
   const user = auth.currentUser;
 
@@ -293,7 +295,10 @@ export async function createFamily() {
     updatedAt: serverTimestamp(),
   });
 
-  const result = await createKidInvite(familyRef.id);
+  const result =
+    initialInviteRole === "parent"
+      ? await createParentInvite(familyRef.id)
+      : await createKidInvite(familyRef.id);
 
   return {
     familyId: familyRef.id,

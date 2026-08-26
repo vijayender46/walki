@@ -1,11 +1,11 @@
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 
 import { useAuth } from "@/features/auth/AuthContext";
@@ -13,9 +13,17 @@ import { createParentInvite } from "@/features/family/familyService";
 import { colors, radius, spacing, typography } from "@/theme";
 
 export default function ParentInviteScreen() {
+  const params = useLocalSearchParams<{
+    code?: string;
+  }>();
+
+  const initialInviteCode =
+    typeof params.code === "string" ? params.code : null;
   const { profile } = useAuth();
 
-  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [inviteCode, setInviteCode] = useState<string | null>(
+    initialInviteCode,
+  );
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
