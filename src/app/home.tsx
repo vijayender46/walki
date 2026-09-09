@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-
 import {
   ActivityIndicator,
   Animated,
@@ -17,6 +16,7 @@ import { router } from "expo-router";
 
 import { AddMemberModal } from "@/components/AddMemberModal";
 import { KidHome } from "@/components/KidHome";
+import { NotificationInboxModal } from "@/components/NotificationInboxModal";
 import { TalkButton } from "@/components/TalkButton";
 
 import { getDefaultAvatar } from "@/constants/defaultAvatars";
@@ -45,6 +45,18 @@ import {
   createParentInvite,
 } from "@/features/family/familyService";
 
+import {
+  createFamilyParentNotifications,
+  createParentNotification,
+  getRecentParentNotifications,
+  listenToRecentParentNotifications,
+  markParentNotificationRead,
+  type WalkiInboxNotification,
+} from "@/features/notifications/firestoreNotificationService";
+
+import { registerForPushNotifications } from "@/features/notifications/notificationService";
+import { savePushToken } from "@/features/notifications/pushTokenService";
+
 import { acknowledgeSos, listenToFamilySos } from "@/features/sos/sosService";
 
 import { colors, gradients, shadows, spacing, typography } from "@/theme";
@@ -68,37 +80,34 @@ export default function HomeScreen() {
 
   /*
    * ==========================================
+   * NOTIFICATION INBOX
+   * ==========================================
+   */
+
+  const [recentNotifications, setRecentNotifications] = useState<
+    WalkiInboxNotification[]
+  >([]);
+
+  const [isNotificationInboxOpen, setIsNotificationInboxOpen] = useState(false);
+
+  /*
+   * ==========================================
    * ACTIVE SOS KIDS
    * ==========================================
-   *
-   * Stable kidIds currently reporting:
-   *
-   * status: "active"
    */
+
   const [activeSosKidIds, setActiveSosKidIds] = useState<Set<string>>(
     new Set(),
   );
 
-  /*
-   * One animation drives every currently active
-   * SOS avatar.
-   */
   const sosFlash = useRef(new Animated.Value(0)).current;
 
   /*
    * ==========================================
    * KID DIRECT RECIPIENT
    * ==========================================
-   *
-   * null
-   * → family broadcast
-   *
-   * parent
-   * → parent_{uid}
-   *
-   * kid
-   * → kid_{kidId}
    */
+
   const [selectedKidRecipient, setSelectedKidRecipient] =
     useState<KidHomeFamilyMember | null>(null);
 
@@ -121,6 +130,33 @@ export default function HomeScreen() {
 
     playAudio: playRecordingFromUri,
   });
+
+  /*
+   * ==========================================
+   * PARENT FAMILY KIDS
+   * ==========================================
+   */
+
+  useEffect(() => {
+    if (profile?.role !== "parent" || !profile.uid) {
+      setRecentNotifications([]);
+      return;
+    }
+
+    const unsubscribe = listenToRecentParentNotifications({
+      parentUid: profile.uid,
+
+      onNotifications: (notifications) => {
+        setRecentNotifications(notifications);
+      },
+
+      onError: (error) => {
+        console.error("Parent notification listener error:", error);
+      },
+    });
+
+    return unsubscribe;
+  }, [profile?.role, profile?.uid]);
 
   /*
    * ==========================================
@@ -171,11 +207,35 @@ export default function HomeScreen() {
 
   /*
    * ==========================================
+   * REALTIME NOTIFICATION INBOX
+   * ==========================================
+   */
+
+  useEffect(() => {
+    if (profile?.role !== "parent" || !profile.uid) {
+      setRecentNotifications([]);
+      return;
+    }
+
+    const unsubscribe = listenToRecentParentNotifications({
+      parentUid: profile.uid,
+
+      onNotifications: (notifications) => {
+        setRecentNotifications(notifications);
+      },
+
+      onError: (error) => {
+        console.error("Parent notification listener error:", error);
+      },
+    });
+
+    return unsubscribe;
+  }, [profile?.role, profile?.uid]);
+
+  /*
+   * ==========================================
    * PARENT SOS LISTENER
    * ==========================================
-   *
-   * One realtime listener for the whole family's
-   * SOS collection.
    */
 
   useEffect(() => {
@@ -209,7 +269,6 @@ export default function HomeScreen() {
   useEffect(() => {
     if (activeSosKidIds.size === 0) {
       sosFlash.stopAnimation();
-
       sosFlash.setValue(0);
 
       return;
@@ -239,12 +298,62 @@ export default function HomeScreen() {
   }, [activeSosKidIds.size, sosFlash]);
 
   /*
-   * Clear a Kid's selected recipient if the
-   * authenticated account/family changes.
+   * ==========================================
+   * PARENT PUSH REGISTRATION
+   * ==========================================
    */
+
+  useEffect(() => {
+    if (profile?.role !== "parent" || !profile.uid) {
+      console.log("PUSH skipped:", {
+        role: profile?.role,
+        uid: profile?.uid,
+      });
+
+      return;
+    }
+
+    let isCancelled = false;
+
+    const registerParentPush = async () => {
+      try {
+        console.log("PUSH 1: starting registration");
+
+        const token = await registerForPushNotifications();
+
+        console.log("PUSH 2: Expo token received:", token);
+
+        if (isCancelled) {
+          return;
+        }
+
+        await savePushToken({
+          userUid: profile.uid,
+          token,
+        });
+
+        console.log("PUSH 3: token saved to Firestore");
+      } catch (error) {
+        console.error("Parent push registration error:", error);
+      }
+    };
+
+    void registerParentPush();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [profile?.role, profile?.uid]);
+
   useEffect(() => {
     setSelectedKidRecipient(null);
   }, [profile?.uid, profile?.familyId]);
+
+  /*
+   * ==========================================
+   * FAMILY INVITES
+   * ==========================================
+   */
 
   const openInviteScreen = (
     inviteCode: string,
@@ -326,18 +435,15 @@ export default function HomeScreen() {
    * ==========================================
    * PARENT KID PRESS
    * ==========================================
-   *
-   * Normal kid:
-   * → open kid profile
-   *
-   * Kid with active SOS:
-   * → acknowledge SOS
-   * → stop local flash immediately
-   * → open kid profile
    */
 
   const handleKidPress = async (kid: UserProfile) => {
     const currentProfile = profile;
+
+    /*
+     * Existing app currently uses kid.uid for
+     * the working SOS flow. Preserve it.
+     */
 
     const hasActiveSos = activeSosKidIds.has(kid.uid);
 
@@ -355,12 +461,6 @@ export default function HomeScreen() {
           parentUid: currentProfile.uid,
         });
 
-        /*
-         * Optimistic local update.
-         *
-         * Firestore listener will shortly confirm
-         * the same state.
-         */
         setActiveSosKidIds((current) => {
           const next = new Set(current);
 
@@ -385,6 +485,98 @@ export default function HomeScreen() {
       },
     });
   };
+
+  /*
+   * ==========================================
+   * FIRESTORE NOTIFICATION INBOX
+   * ==========================================
+   */
+
+  const openNotificationInbox = async () => {
+    if (profile?.role !== "parent" || !profile.uid) {
+      return;
+    }
+
+    try {
+      const notifications = await getRecentParentNotifications(profile.uid);
+
+      setRecentNotifications(notifications);
+    } catch (error) {
+      console.error("Open notification inbox error:", error);
+    }
+
+    setIsNotificationInboxOpen(true);
+  };
+
+  const handleNotificationPress = async (
+    notification: WalkiInboxNotification,
+  ) => {
+    const currentProfile = profile;
+
+    if (currentProfile?.role !== "parent" || !currentProfile.uid) {
+      return;
+    }
+
+    try {
+      await markParentNotificationRead({
+        parentUid: currentProfile.uid,
+
+        notificationId: notification.id,
+      });
+
+      /*
+       * Update immediately instead of waiting
+       * for another Firestore fetch.
+       */
+
+      setRecentNotifications((current) =>
+        current.map((item) =>
+          item.id === notification.id
+            ? {
+                ...item,
+                isRead: true,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      console.error("Mark notification read error:", error);
+    }
+
+    setIsNotificationInboxOpen(false);
+
+    /*
+     * SOS notification:
+     *
+     * Find kid using either stable kidId
+     * or current uid.
+     */
+
+    if (notification.type === "sos" && notification.kidId) {
+      const kid = kids.find(
+        (familyKid) =>
+          familyKid.kidId === notification.kidId ||
+          familyKid.uid === notification.kidId,
+      );
+
+      if (kid) {
+        void handleKidPress(kid);
+
+        return;
+      }
+    }
+
+    /*
+     * Voice notification handling will be
+     * connected after SOS inbox is verified.
+     */
+
+    router.push("/home");
+  };
+
+  const unreadNotificationCount = recentNotifications.filter(
+    (notification) => !notification.isRead,
+  ).length;
 
   /*
    * ==========================================
@@ -423,13 +615,12 @@ export default function HomeScreen() {
 
       const upload = await uploadWalkiAudio({
         audioUri: uri,
+
         familyId: currentProfile.familyId,
       });
 
       /*
-       * ======================================
        * KID → DIRECT PARENT
-       * ======================================
        */
 
       if (
@@ -446,13 +637,47 @@ export default function HomeScreen() {
           senderKidId: currentProfile.kidId ?? null,
         });
 
+        /*
+         * ======================================
+         * SAVE VOICE NOTIFICATION
+         * ======================================
+         *
+         * Audio has already been successfully
+         * published.
+         *
+         * Inbox failure must not make the Walki
+         * message itself appear to have failed.
+         */
+
+        try {
+          const senderName = currentProfile.displayName || "Kid";
+
+          await createParentNotification({
+            parentUid: selectedKidRecipient.uid,
+
+            type: "voice",
+
+            title: `Walki from ${senderName}`,
+
+            body: `${senderName} sent you a voice message`,
+
+            familyId: currentProfile.familyId,
+
+            kidId: currentProfile.kidId ?? null,
+
+            senderUid: currentProfile.uid,
+
+            senderDisplayName: senderName,
+          });
+        } catch (error) {
+          console.error("Voice notification inbox save failed:", error);
+        }
+
         return;
       }
 
       /*
-       * ======================================
        * KID → DIRECT KID
-       * ======================================
        */
 
       if (
@@ -473,9 +698,7 @@ export default function HomeScreen() {
       }
 
       /*
-       * ======================================
        * FAMILY BROADCAST
-       * ======================================
        */
 
       await publishFamilyMessage({
@@ -486,6 +709,35 @@ export default function HomeScreen() {
         senderKidId:
           currentProfile.role === "kid" ? (currentProfile.kidId ?? null) : null,
       });
+
+      /*
+       * Kid family broadcast:
+       * save one inbox notification for every parent.
+       */
+
+      if (currentProfile.role === "kid") {
+        try {
+          const senderName = currentProfile.displayName || "Kid";
+
+          await createFamilyParentNotifications({
+            familyId: currentProfile.familyId,
+
+            type: "voice",
+
+            title: `Walki from ${senderName}`,
+
+            body: `${senderName} sent a family Walki`,
+
+            kidId: currentProfile.kidId ?? null,
+
+            senderUid: currentProfile.uid,
+
+            senderDisplayName: senderName,
+          });
+        } catch (error) {
+          console.error("Family voice notification inbox save failed:", error);
+        }
+      }
     } catch (error) {
       console.error("Send Walki error:", error);
 
@@ -564,14 +816,23 @@ export default function HomeScreen() {
 
           <Text style={styles.logo}>Walki</Text>
 
-          <Pressable style={styles.notificationButton}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Notifications"
+            onPress={() => {
+              void openNotificationInbox();
+            }}
+            style={styles.notificationButton}
+          >
             <Ionicons
               name="notifications-outline"
               size={25}
               color={colors.parent.textPrimary}
             />
 
-            <View style={styles.notificationDot} />
+            {unreadNotificationCount > 0 ? (
+              <View style={styles.notificationDot} />
+            ) : null}
           </Pressable>
         </View>
 
@@ -823,6 +1084,15 @@ export default function HomeScreen() {
           void handleAddParent();
         }}
       />
+
+      <NotificationInboxModal
+        visible={isNotificationInboxOpen}
+        notifications={recentNotifications}
+        onClose={() => setIsNotificationInboxOpen(false)}
+        onNotificationPress={(notification) => {
+          void handleNotificationPress(notification);
+        }}
+      />
     </View>
   );
 }
@@ -883,7 +1153,7 @@ const styles = StyleSheet.create({
 
     borderRadius: 4,
 
-    backgroundColor: colors.parent.notification,
+    backgroundColor: "#DC2626",
 
     borderWidth: 2,
     borderColor: colors.parent.backgroundTop,
@@ -1018,7 +1288,11 @@ const styles = StyleSheet.create({
   },
 
   familyMemberPressed: {
-    transform: [{ scale: 0.95 }],
+    transform: [
+      {
+        scale: 0.95,
+      },
+    ],
     opacity: 0.8,
   },
 
@@ -1046,9 +1320,6 @@ const styles = StyleSheet.create({
     borderColor: colors.girl.primary,
   },
 
-  /*
-   * SOS modifies only the existing avatar ring.
-   */
   familyAvatarSos: {
     borderWidth: 5,
 
@@ -1119,7 +1390,6 @@ const styles = StyleSheet.create({
 
   sosMemberName: {
     color: "#DC2626",
-
     fontWeight: "800",
   },
 

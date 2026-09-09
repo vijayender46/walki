@@ -30,16 +30,22 @@ export default function IndexScreen() {
 
   /*
    * Non-anonymous users are parent accounts.
-   * If their profile is missing, continue account setup.
+   * If their profile is missing,
+   * continue account setup.
    */
   if (!user.isAnonymous && !profile) {
     return <Redirect href="/account/setup" />;
   }
 
   /*
-   * Completed parent and kid profiles both go home.
+   * Completed Parent/Kid profiles first
+   * pass through device permission setup.
+   *
+   * The permission screen automatically
+   * sends them Home when permissions
+   * are already granted.
    */
-  return <Redirect href="/home" />;
+  return <Redirect href="/device-setup" />;
 }
 
 const styles = StyleSheet.create({

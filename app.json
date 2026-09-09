@@ -12,7 +12,11 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icons/icon.png",
         "backgroundColor": "#E8F1FF"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icons/favicon.png"
@@ -31,12 +35,25 @@
         }
       ],
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/sounds/sos_alert.wav"]
+        }
+      ]
     ],
     "extra": {
       "router": {},
       "eas": {
         "projectId": "7a47db2a-567d-4242-b982-630d0b2c9bfd"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.vijayenderthakur.walki",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
       }
     }
   }
